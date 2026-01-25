@@ -45,13 +45,13 @@ extension XMLDecoderImplementation {
     }
     
     public func decodeDateFromString() throws -> Date {
-        let stringValue: String = try decodeString()
+        let _: String = try decodeString()
         // Logica di conversione
         fatalError("Implement decodeDateFromString")
     }
     
     public func decodeDataFromString() throws -> Data {
-        let stringValue: String = try decodeString()
+        let _: String = try decodeString()
         // Logica di conversione
         fatalError("Implement decodeDataFromString")
     }
