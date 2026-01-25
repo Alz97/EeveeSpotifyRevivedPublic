@@ -29,7 +29,7 @@ func getPlanOverviewData() throws -> Data {
         $0.subscription = SpotifyPlan.SubscriptionInfo.with {
             $0.planVariant = 2
             $0.planName = "EeveeSpotify"
-            $0.planCategory = "Eevee"
+            $0.planCategory = "Eevee - WADBB ReMod"
             $0.colorCode = "#FFD2D7"
             $0.features = [
                 SpotifyPlan.Feature.with {
