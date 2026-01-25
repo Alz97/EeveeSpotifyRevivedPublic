@@ -1,16 +1,12 @@
 import Foundation
 
-// MARK: - SingleValueDecodingContainer conformance
+// MARK: - SingleValueDecodingContainer conformance (solo i metodi che NON danno warning)
 extension XMLDecoderImplementation: SingleValueDecodingContainer {
     public func decodeNil() -> Bool {
         return (try? topContainer().isNull) ?? true
     }
 
     public func decode(_: Bool.Type) throws -> Bool {
-        return try unbox(try topContainer())
-    }
-
-    public func decode(_: Decimal.Type) throws -> Decimal {
         return try unbox(try topContainer())
     }
 
@@ -39,16 +35,24 @@ extension XMLDecoderImplementation: SingleValueDecodingContainer {
     }
 }
 
-// MARK: - Extension separata con metodi specifici
+// MARK: - Estensione separata per i metodi che causano warning
 private extension XMLDecoderImplementation {
-    // Questi metodi sono chiamati internamente da unbox
-    func unboxDate() throws -> Date {
-        // La logica originale che avevi in decode(_: String.Type) -> Date
+    // Metodo per Decimal (causa warning se è nell'estensione del protocollo)
+    func decodeDecimal() throws -> Decimal {
         return try unbox(try topContainer())
     }
     
-    func unboxData() throws -> Data {
-        // La logica originale che avevi in decode(_: String.Type) -> Data
-        return try unbox(try topContainer())
+    // Metodo per Date (se necessario)
+    func decodeDateFromString() throws -> Date {
+        let stringValue: String = try self.decode(String.self)
+        // Implementa la tua logica di conversione
+        fatalError("Implement decodeDateFromString")
+    }
+    
+    // Metodo per Data (se necessario)
+    func decodeDataFromString() throws -> Data {
+        let stringValue: String = try self.decode(String.self)
+        // Implementa la tua logica di conversione
+        fatalError("Implement decodeDataFromString")
     }
 }
