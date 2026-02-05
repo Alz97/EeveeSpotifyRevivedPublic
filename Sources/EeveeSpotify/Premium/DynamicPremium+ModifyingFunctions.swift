@@ -74,6 +74,10 @@ private func modifyAttributes(_ attributes: inout [String: AccountAttribute]) {
         $0.boolValue = true 
     }
     
+    attributes["lossless-bitrate"] = AccountAttribute.with {
+        $0.boolValue = true 
+    }
+    
     attributes["ads"] = AccountAttribute.with {
         $0.boolValue = false
     }
