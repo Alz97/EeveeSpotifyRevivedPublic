@@ -4,10 +4,6 @@ import Orion
 // Global variable for access token
 public var spotifyAccessToken: String?
 
-// Helper function to start capturing from other files
-func DataLoaderServiceHooks_startCapturing() {
-}
-
 class SPTDataLoaderServiceHook: ClassHook<NSObject>, SpotifySessionDelegate {
     static let targetName = "SPTDataLoaderService"
 
@@ -29,11 +25,7 @@ class SPTDataLoaderServiceHook: ClassHook<NSObject>, SpotifySessionDelegate {
         let shouldPatchPremium = BasePremiumPatchingGroup.isActive
         let shouldReplaceLyrics = BaseLyricsGroup.isActive
         
-        let isLyricsURL = url.isLyrics
-        if isLyricsURL {
-        }
-        
-        return (shouldReplaceLyrics && isLyricsURL)
+        return (shouldReplaceLyrics && url.isLyrics)
             || (shouldPatchPremium && (url.isCustomize || url.isPremiumPlanRow || url.isPremiumBadge || url.isPlanOverview))
     }
     
@@ -47,7 +39,7 @@ class SPTDataLoaderServiceHook: ClassHook<NSObject>, SpotifySessionDelegate {
         if url.isDeleteToken {
             respondWithCustomData(Data(), task: task, session: session)
         } else if url.isAccountValidate {
-            let response = "{\"status\":1,\"country\":\"US\",\"is_country_launched\":true}".data(using: .utf8)!
+            let response = "{\"status\":1,\"country\":\"IT\",\"is_country_launched\":true}".data(using: .utf8)!
             respondWithCustomData(response, task: task, session: session)
         } else if url.isOndemandSelector {
             respondWithCustomData(Data(), task: task, session: session)
@@ -110,16 +102,11 @@ class SPTDataLoaderServiceHook: ClassHook<NSObject>, SpotifySessionDelegate {
             return
         }
         
-        
         do {
             if url.isLyrics {
-                
                 let originalLyrics = try? Lyrics(serializedBytes: buffer)
-                
-                // Try to fetch custom lyrics with a timeout
                 let semaphore = DispatchSemaphore(value: 0)
                 var customLyricsData: Data?
-                var customLyricsError: Error?
                 
                 DispatchQueue.global(qos: .userInitiated).async {
                     do {
@@ -128,43 +115,18 @@ class SPTDataLoaderServiceHook: ClassHook<NSObject>, SpotifySessionDelegate {
                             originalLyrics: originalLyrics
                         )
                     } catch {
-                        customLyricsError = error
                     }
                     semaphore.signal()
                 }
                 
-                // Wait up to 5 seconds for custom lyrics (cached LRCLIB responses are instant)
                 let timeout = DispatchTime.now() + .milliseconds(5000)
                 let result = semaphore.wait(timeout: timeout)
                 
                 if result == .success, let data = customLyricsData {
                     respondWithCustomData(data, task: task, session: session)
-                    
-                    // Show popup indicating custom lyrics source - DISABLED FOR PRODUCTION
-                    // DispatchQueue.main.async {
-                    //     PopUpHelper.showPopUp(
-                    //         message: "🎵 Using \(UserDefaults.lyricsSource.description) lyrics",
-                    //         buttonText: "OK"
-                    //     )
-                    // }
-                    
-                    // Complete the request
                     orig.URLSession(session, task: task, didCompleteWithError: nil)
                 } else {
-                    if result == .timedOut {
-                    } else {
-                    }
                     respondWithCustomData(buffer, task: task, session: session)
-                    
-                    // Show popup indicating fallback to original - DISABLED FOR PRODUCTION
-                    // DispatchQueue.main.async {
-                    //     PopUpHelper.showPopUp(
-                    //         message: result == .timedOut ? "⏱️ Using Spotify Original (timeout)" : "🎵 Using Spotify Original",
-                    //         buttonText: "OK"
-                    //     )
-                    // }
-                    
-                    // Complete the request
                     orig.URLSession(session, task: task, didCompleteWithError: nil)
                 }
                 return
