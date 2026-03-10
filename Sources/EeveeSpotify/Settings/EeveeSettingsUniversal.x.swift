@@ -1,8 +1,9 @@
 import Orion
 import SwiftUI
 import UIKit
+import Foundation
 
-// Universal settings integration that works across all Spotify versions
+// Universal settings integration group (tutti gli hook appartengono a questo gruppo)
 struct UniversalSettingsIntegrationGroup: HookGroup { }
 
 // MARK: - Primary: ProfileSettingsSection hook for settings menu row
@@ -67,58 +68,25 @@ class UniversalProfileSettingsSectionHook: ClassHook<NSObject> {
             navigationTitle: "EeveeSpotify"
         )
         
-        let button = UIButton()
-        
-        if let githubImage = BundleHelper.shared.uiImage("github") {
-            button.setImage(githubImage.withRenderingMode(.alwaysOriginal), for: .normal)
-        } else {
-             // Fallback if github image is missing
-             button.setImage(UIImage(systemName: "globe"), for: .normal)
-        }
-        
-        button.addTarget(
-            eeveeSettingsController,
-            action: #selector(eeveeSettingsController.openRepositoryUrl(_:)),
-            for: .touchUpInside
-        )
-        
-        let menuBarItem = UIBarButtonItem(customView: button)
-        menuBarItem.customView?.heightAnchor.constraint(equalToConstant: 22).isActive = true
-        menuBarItem.customView?.widthAnchor.constraint(equalToConstant: 22).isActive = true
-        eeveeSettingsController.navigationItem.rightBarButtonItem = menuBarItem
-        
         navigationController.pushViewController(eeveeSettingsController, animated: true)
     }
 }
 
 // MARK: - Global Helper to avoid Orion Hooking Issues with setupEeveeButton
-// This logic is moved outside the ClassHook so Orion doesn't try to find it as an Obj-C method on the target class.
 func injectEeveeButton(into target: UIViewController) {
-    NSLog("[EeveeSpotify] injectEeveeButton called for \(String(describing: type(of: target)))")
-    
     // Check if the button already exists in rightBarButtonItems
-    if let rightItems = target.navigationItem.rightBarButtonItems {
-        if rightItems.contains(where: { $0.tag == 1337 }) {
-             NSLog("[EeveeSpotify] Button already exists (tag 1337)")
-             return 
-        }
+    if let rightItems = target.navigationItem.rightBarButtonItems,
+       rightItems.contains(where: { $0.tag == 1337 }) {
+        return
     }
-
-    NSLog("[EeveeSpotify] Creating and injecting button...")
     
     let button = UIButton(type: .system)
-    // Use system image to guarantee visibility and avoid crashes
     let image = UIImage(systemName: "gearshape.fill") ?? UIImage()
     button.setImage(image, for: .normal)
     button.tintColor = .white
     
     let action = UIAction { [weak target] _ in
-        guard let target = target, let navigationController = target.navigationController else { 
-            NSLog("[EeveeSpotify] Navigation controller not found")
-            return 
-        }
-        
-        NSLog("[EeveeSpotify] Opening EeveeSettings...")
+        guard let target = target, let navigationController = target.navigationController else { return }
         
         let eeveeSettingsController = EeveeSettingsViewController(
             target.view.bounds,
@@ -126,102 +94,75 @@ func injectEeveeButton(into target: UIViewController) {
             navigationTitle: "EeveeSpotify"
         )
         
-        // Add GitHub button to the Eevee settings page itself
-        let subButton = UIButton(type: .system)
-        
-        // Try loading hex image, fallback to system "globe" if it fails or bundle is missing
-        let bundleImage = BundleHelper.shared.uiImage("hex")
-        // Check if the image returned from BundleHelper is valid (has a size)
-        if let bundleImage = bundleImage, bundleImage.size != .zero {
-            subButton.setImage(bundleImage.withRenderingMode(.alwaysOriginal), for: .normal)
-        } else {
-             subButton.setImage(UIImage(systemName: "globe"), for: .normal)
-        }
-        
-        subButton.tintColor = .white
-        
-        let subAction = UIAction { [weak eeveeSettingsController] _ in
-            eeveeSettingsController?.openRepositoryUrl(subButton)
-        }
-        subButton.addAction(subAction, for: .touchUpInside)
-        
-        let menuBarItem = UIBarButtonItem(customView: subButton)
-        menuBarItem.customView?.heightAnchor.constraint(equalToConstant: 22).isActive = true
-        menuBarItem.customView?.widthAnchor.constraint(equalToConstant: 22).isActive = true
-        eeveeSettingsController.navigationItem.rightBarButtonItem = menuBarItem
-        
         navigationController.pushViewController(eeveeSettingsController, animated: true)
     }
     
     button.addAction(action, for: .touchUpInside)
     
     let item = UIBarButtonItem(customView: button)
-    item.tag = 1337 // Tag to prevent duplicate addition
+    item.tag = 1337
     item.customView?.widthAnchor.constraint(equalToConstant: 22).isActive = true
     item.customView?.heightAnchor.constraint(equalToConstant: 22).isActive = true
     
     var items = target.navigationItem.rightBarButtonItems ?? []
-    items.insert(item, at: 0) // Prepend instead of append to ensure visibility
+    items.insert(item, at: 0)
     target.navigationItem.rightBarButtonItems = items
-    
-    NSLog("[EeveeSpotify] Button injected. Items count: \(items.count)")
 }
 
-// MARK: - Fallback: Hook SettingsViewController directly (New UI)
+// MARK: - Fallback hooks (attivi solo se ProfileSettingsSection non esiste)
 class SettingsViewControllerHook: ClassHook<UIViewController> {
     typealias Group = UniversalSettingsIntegrationGroup
     static let targetName = "SettingsViewController"
 
     func viewDidLoad() {
         orig.viewDidLoad()
+        guard NSClassFromString("ProfileSettingsSection") == nil else { return }
         injectEeveeButton(into: target)
     }
 
     func viewWillAppear(_ animated: Bool) {
         orig.viewWillAppear(animated)
+        guard NSClassFromString("ProfileSettingsSection") == nil else { return }
         injectEeveeButton(into: target)
     }
 }
 
-// MARK: - Fallback: Hook RootSettingsViewController directly
 class RootSettingsViewControllerHook: ClassHook<UIViewController> {
     typealias Group = UniversalSettingsIntegrationGroup
     static let targetName = "RootSettingsViewController"
 
     func viewDidLoad() {
         orig.viewDidLoad()
+        guard NSClassFromString("ProfileSettingsSection") == nil else { return }
         injectEeveeButton(into: target)
     }
 
     func viewWillAppear(_ animated: Bool) {
         orig.viewWillAppear(animated)
+        guard NSClassFromString("ProfileSettingsSection") == nil else { return }
         injectEeveeButton(into: target)
     }
 }
 
-// MARK: - Generic Fallback: Hook UINavigationController to catch Settings by title/class name
 class SettingsNavigationStackHook: ClassHook<UINavigationController> {
     typealias Group = UniversalSettingsIntegrationGroup
 
     func pushViewController(_ viewController: UIViewController, animated: Bool) {
         orig.pushViewController(viewController, animated: animated)
         
+        guard NSClassFromString("ProfileSettingsSection") == nil else { return }
+        
         let targetVC = viewController
         
-        // Check both immediately and with a delay
         let checkBlock = {
             let className = String(describing: type(of: targetVC))
             
-            // Check title
             if let title = targetVC.title, title == "Settings" {
-                NSLog("[EeveeSpotify] Detected Settings via Title: \(className)")
                 injectEeveeButton(into: targetVC)
                 return
             }
             
-            // Check class name
             if className.contains("Settings") && !className.contains("Eevee") {
-                NSLog("[EeveeSpotify] Detected Settings via Class Name: \(className)")
                 injectEeveeButton(into: targetVC)
                 return
             }
