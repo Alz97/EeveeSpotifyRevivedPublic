@@ -27,31 +27,6 @@ class ProfileSettingsSectionHook: ClassHook<NSObject> {
                 navigationTitle: "EeveeSpotify"
             )
             
-            //
-            
-            let button = UIButton()
-            
-            if let gitImage = BundleHelper.shared.uiImage("github") {
-                button.setImage(gitImage.withRenderingMode(.alwaysOriginal), for: .normal)
-            } else {
-                button.setImage(UIImage(systemName: "globe"), for: .normal)
-            }
-            
-            button.addTarget(
-                eeveeSettingsController,
-                action: #selector(eeveeSettingsController.openRepositoryUrl(_:)),
-                for: .touchUpInside
-            )
-            
-            //
-            
-            let menuBarItem = UIBarButtonItem(customView: button)
-            
-            menuBarItem.customView?.heightAnchor.constraint(equalToConstant: 22).isActive = true
-            menuBarItem.customView?.widthAnchor.constraint(equalToConstant: 22).isActive = true
-
-            eeveeSettingsController.navigationItem.rightBarButtonItem = menuBarItem
-            
             navigationController.pushViewController(
                 eeveeSettingsController,
                 animated: true
