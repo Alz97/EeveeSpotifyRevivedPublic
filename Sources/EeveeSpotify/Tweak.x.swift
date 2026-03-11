@@ -2,27 +2,6 @@ import Orion
 import EeveeSpotifyC
 import UIKit
 
-func writeDebugLog(_ message: String) {
-    // Log to system console
-    NSLog("[EeveeSpotify] %@", message)
-
-    let logPath = NSTemporaryDirectory() + "eeveespotify_debug.log"
-    let timestamp = Date().description
-    let logMessage = "[\(timestamp)] \(message)\n"
-    
-    if FileManager.default.fileExists(atPath: logPath) {
-        if let fileHandle = FileHandle(forWritingAtPath: logPath) {
-            fileHandle.seekToEndOfFile()
-            if let data = logMessage.data(using: .utf8) {
-                fileHandle.write(data)
-            }
-            fileHandle.closeFile()
-        }
-    } else {
-        try? logMessage.write(toFile: logPath, atomically: true, encoding: .utf8)
-    }
-}
-
 // Timestamp of tweak initialization — persists across Orion reinits within the same process
 // using an environment variable. This prevents the 30s auth window from resetting
 // when the C++ timer triggers a session reinit cycle.
@@ -75,12 +54,10 @@ func activatePremiumPatchingGroup() {
 }
 
 struct EeveeSpotify: Tweak {
-    static let version = "6.6.0"
+    static let version = "6.6.1"
     
     static var hookTarget: VersionHookTarget {
         let version = Bundle.main.infoDictionary!["CFBundleShortVersionString"] as! String
-        
-        NSLog("[EeveeSpotify] Detected Spotify version: \(version)")
         
         switch version {
         case "9.0.48":
@@ -98,7 +75,6 @@ struct EeveeSpotify: Tweak {
     init() {
         // Activate session logout protection first (all versions)
         SessionLogoutHookGroup().activate()
-        writeDebugLog("EeveeSpotify \(EeveeSpotify.version) initialized — hook target: \(EeveeSpotify.hookTarget)")
 
         // For 9.1.x, activate premium patching and lyrics
         if EeveeSpotify.hookTarget == .v91 {
@@ -113,53 +89,10 @@ struct EeveeSpotify: Tweak {
             if lyricsEnabled {
                 BaseLyricsGroup().activate()
                 V91LyricsGroup().activate()
-
-            } else {
-
             }
             
             // Settings integration
             UniversalSettingsIntegrationGroup().activate()
-            // Also activate the banner for 9.1.x to ensure visibility if menu is missing
-            // V91SettingsIntegrationGroup().activate()
-            
-            NSLog("[EeveeSpotify] Initialization complete for 9.1.x")
-            
-            // Show startup popup with status - DISABLED FOR PRODUCTION
-            // DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
-            //     let lyricsStatus = lyricsEnabled ? "✅ ENABLED (\(UserDefaults.lyricsSource.rawValue))" : "❌ DISABLED"
-            //     let sourceName = UserDefaults.lyricsSource.description
-            //     let message = """
-            //     EeveeSpotify \(EeveeSpotify.version)
-            //     Spotify 9.1.x EXPERIMENTAL
-            //     
-            //     📝 Lyrics: \(lyricsStatus)
-            //     Source: \(sourceName)
-            //     
-            //     🔍 Tap 'Start' to capture network requests.
-            //     
-            //     After ~15 requests you'll see if 9.1.6 makes lyrics network calls.
-            //     
-            //     NOTE: If lyrics button is missing, try switching to Musixmatch or Genius in Settings.
-            //     """
-            //     
-            //     PopUpHelper.showPopUp(
-            //         message: message,
-            //         buttonText: "Start Debug",
-            //         secondButtonText: "Skip",
-            //         onPrimaryClick: {
-            //             // Start capturing URLs
-            //             DataLoaderServiceHooks_startCapturing()
-            //             
-            //             DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
-            //                 PopUpHelper.showPopUp(
-            //                     message: "🔍 Capturing started!\n\nNow open ANY song and tap lyrics.\n\nWait ~15 seconds for results.",
-            //                     buttonText: "OK"
-            //                 )
-            //             }
-            //         }
-            //     )
-            // }
             
             return
         }
