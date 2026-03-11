@@ -152,11 +152,10 @@ class OauthAccessTokenBridgeHook: ClassHook<NSObject> {
 
     // orion:new
     func startExpiryExtender() {
-        let weak = target
-        DispatchQueue.global(qos: .utility).async {
+        DispatchQueue.global(qos: .utility).async { [weak target] in
             while true {
                 Thread.sleep(forTimeInterval: 60)
-                guard let obj = weak else { break } // Fixed warning: direct unwrap
+                guard let obj = target else { break }
                 let cls: AnyClass = type(of: obj)
                 if let ivar = class_getInstanceVariable(cls, "expiresAt") {
                     let farFuture = Date(timeIntervalSinceNow: 365 * 24 * 60 * 60)
@@ -227,7 +226,7 @@ class URLSessionTaskResumeHook: ClassHook<NSObject> {
            let host = url.host?.lowercased() {
 
             let elapsed = Date().timeIntervalSince(tweakInitTime)
-            let path = url.path // Added missing path variable
+            let path = url.path
 
             // Block outgoing DeleteToken/signup requests at network level
             // Only block after initial startup (30s) to allow fresh login/signup
