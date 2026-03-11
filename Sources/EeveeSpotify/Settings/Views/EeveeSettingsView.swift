@@ -35,8 +35,6 @@ struct EeveeSettingsView: View {
                 )
             }
             
-            //
-            
             Button {
                 pushSettingsController(
                     with: EeveePatchingSettingsView(),
@@ -87,50 +85,6 @@ struct EeveeSettingsView: View {
                     title: "experiments".localized,
                     imageSystemName: "sparkle"
                 )
-            }
-            
-            //
-            
-            Section(header: Text("debug_title".localized), footer: Text("debug_footer".localized)) {
-                Button {
-                    let logPath = NSTemporaryDirectory() + "eeveespotify_debug.log"
-                    guard FileManager.default.fileExists(atPath: logPath),
-                          let logData = FileManager.default.contents(atPath: logPath),
-                          logData.count > 0 else {
-                        PopUpHelper.showPopUp(message: "debug_message_no_logs".localized, buttonText: "OK")
-                        return
-                    }
-                    let logURL = URL(fileURLWithPath: logPath)
-                    let activityVC = UIActivityViewController(activityItems: [logURL], applicationActivities: nil)
-                    if let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-                       let rootVC = scene.windows.first?.rootViewController {
-                        var topVC = rootVC
-                        while let presented = topVC.presentedViewController { topVC = presented }
-                        if let popover = activityVC.popoverPresentationController {
-                            popover.sourceView = topVC.view
-                            popover.sourceRect = CGRect(x: topVC.view.bounds.midX, y: topVC.view.bounds.midY, width: 0, height: 0)
-                        }
-                        topVC.present(activityVC, animated: true)
-                    }
-                } label: {
-                    HStack {
-                        Image(systemName: "square.and.arrow.up")
-                        Text("debug_export_logs".localized)
-                    }
-                }
-                
-                Button {
-                    let logPath = NSTemporaryDirectory() + "eeveespotify_debug.log"
-                    try? "".write(toFile: logPath, atomically: true, encoding: .utf8)
-                    writeDebugLog("Log cleared by user")
-                    PopUpHelper.showPopUp(message: "debug_message_cleared".localized, buttonText: "OK")
-                } label: {
-                    HStack {
-                        Image(systemName: "trash")
-                        Text("debug_clear_logs".localized)
-                    }
-                    .foregroundColor(.red)
-                }
             }
             
             Section(footer: Text("reset_data_description".localized)) {
