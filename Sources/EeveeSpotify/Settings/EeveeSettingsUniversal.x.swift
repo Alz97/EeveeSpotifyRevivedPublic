@@ -3,101 +3,78 @@ import SwiftUI
 import UIKit
 import Foundation
 
-// Universal settings integration group (tutti gli hook appartengono a questo gruppo)
+// Universal settings integration group
 struct UniversalSettingsIntegrationGroup: HookGroup { }
 
-// MARK: - Primary: ProfileSettingsSection hook for settings menu row
+// MARK: - Primary: ProfileSettingsSection hook (riga nel menu)
 class UniversalProfileSettingsSectionHook: ClassHook<NSObject> {
     typealias Group = UniversalSettingsIntegrationGroup
     static let targetName = "ProfileSettingsSection"
     
     func numberOfRows() -> Int {
-        let original = orig.numberOfRows()
-        return original + 1
+        return orig.numberOfRows() + 1
     }
     
     func didSelectRow(_ row: Int) {
         let originalRows = orig.numberOfRows()
-        
         if row == originalRows {
-            openEeveeSettingsFromHook()
+            openEeveeSettings()
             return
         }
-        
         orig.didSelectRow(row)
     }
     
     func cellForRow(_ row: Int) -> UITableViewCell {
         let originalRows = orig.numberOfRows()
-        
         if row == originalRows {
-            let settingsTableCell = Dynamic.SPTSettingsTableViewCell
+            let cell = Dynamic.SPTSettingsTableViewCell
                 .alloc(interface: SPTSettingsTableViewCell.self)
                 .initWithStyle(3, reuseIdentifier: "EeveeSpotify")
-            
-            let tableViewCell = Dynamic.convert(settingsTableCell, to: UITableViewCell.self)
-            
+            let tableViewCell = Dynamic.convert(cell, to: UITableViewCell.self)
             tableViewCell.accessoryView = type(
                 of: Dynamic.SPTDisclosureAccessoryView
                     .alloc(interface: SPTDisclosureAccessoryView.self)
-            )
-            .disclosureAccessoryView()
-            
+            ).disclosureAccessoryView()
             tableViewCell.textLabel?.text = "EeveeSpotify"
-            
             return tableViewCell
         }
-        
         return orig.cellForRow(row)
     }
     
-    private func openEeveeSettingsFromHook() {
-        // Try to find the root settings controller
-        let rootSettingsController = WindowHelper.shared.findFirstViewController("RootSettingsViewController")
+    private func openEeveeSettings() {
+        let root = WindowHelper.shared.findFirstViewController("RootSettingsViewController")
             ?? WindowHelper.shared.findFirstViewController("SettingsViewController")
             ?? WindowHelper.shared.findFirstViewController("ProfileViewController")
-        
-        guard let rootController = rootSettingsController,
-              let navigationController = rootController.navigationController else {
-            return
-        }
-        
-        let eeveeSettingsController = EeveeSettingsViewController(
+        guard let rootController = root, let nav = rootController.navigationController else { return }
+        let vc = EeveeSettingsViewController(
             rootController.view.bounds,
-            settingsView: AnyView(EeveeSettingsView(navigationController: navigationController)),
+            settingsView: AnyView(EeveeSettingsView(navigationController: nav)),
             navigationTitle: "EeveeSpotify"
         )
-        
-        navigationController.pushViewController(eeveeSettingsController, animated: true)
+        nav.pushViewController(vc, animated: true)
     }
 }
 
-// MARK: - Global Helper to avoid Orion Hooking Issues with setupEeveeButton
+// MARK: - Helper per iniettare il bottone
 func injectEeveeButton(into target: UIViewController) {
-    // Check if the button already exists in rightBarButtonItems
-    if let rightItems = target.navigationItem.rightBarButtonItems,
-       rightItems.contains(where: { $0.tag == 1337 }) {
+    if let items = target.navigationItem.rightBarButtonItems, items.contains(where: { $0.tag == 1337 }) {
         return
     }
     
     let button = UIButton(type: .system)
-    // Usa alwaysOriginal per mantenere il colore bianco anche in contesti con tint
-    let image = UIImage(systemName: "gearshape.fill")?.withRenderingMode(.alwaysOriginal)
+    let image = UIImage(systemName: "gearshape.fill")?.withRenderingMode(.alwaysOriginal) // mantiene il colore
     button.setImage(image, for: .normal)
-    button.tintColor = .white // Forza bianco per visibilità su sfondi scuri
+    button.tintColor = .white
     
     let action = UIAction { [weak target] _ in
-        guard let target = target, let navigationController = target.navigationController else { return }
-        
-        let eeveeSettingsController = EeveeSettingsViewController(
+        guard let target = target, let nav = target.navigationController else { return }
+        let vc = EeveeSettingsViewController(
             target.view.bounds,
-            settingsView: AnyView(EeveeSettingsView(navigationController: navigationController)),
+            settingsView: AnyView(EeveeSettingsView(navigationController: nav)),
             navigationTitle: "EeveeSpotify"
         )
-        
-        navigationController.pushViewController(eeveeSettingsController, animated: true)
+        nav.pushViewController(vc, animated: true)
     }
-    
     button.addAction(action, for: .touchUpInside)
     
     let item = UIBarButtonItem(customView: button)
@@ -110,8 +87,7 @@ func injectEeveeButton(into target: UIViewController) {
     target.navigationItem.rightBarButtonItems = items
 }
 
-// MARK: - Fallback hooks (attivi solo se ProfileSettingsSection non esiste)
-
+// MARK: - Fallback hooks (solo se ProfileSettingsSection non esiste)
 class SettingsViewControllerHook: ClassHook<UIViewController> {
     typealias Group = UniversalSettingsIntegrationGroup
     static let targetName = "SettingsViewController"
@@ -128,6 +104,7 @@ class SettingsViewControllerHook: ClassHook<UIViewController> {
         injectEeveeButton(into: target)
     }
     
+    // AGGIUNTA: inietta anche dopo che la vista è apparsa (UI pronta)
     func viewDidAppear(_ animated: Bool) {
         orig.viewDidAppear(animated)
         guard NSClassFromString("ProfileSettingsSection") == nil else { return }
@@ -158,7 +135,7 @@ class RootSettingsViewControllerHook: ClassHook<UIViewController> {
     }
 }
 
-// AGGIUNTO: Hook per ProfileViewController (spesso root delle impostazioni)
+// AGGIUNTA: Hook per ProfileViewController (spesso il root delle impostazioni)
 class ProfileViewControllerHook: ClassHook<UIViewController> {
     typealias Group = UniversalSettingsIntegrationGroup
     static let targetName = "ProfileViewController"
@@ -195,7 +172,7 @@ class SettingsNavigationStackHook: ClassHook<UINavigationController> {
         let checkBlock = {
             let className = String(describing: type(of: targetVC))
             
-            // Lista completa dei titoli (come nell'originale)
+            // (stessa lista titoli dell'originale, mantenuta)
             let settingsTitles: Set<String> = [
                 // English
                 "Settings", "Preferences",
@@ -280,13 +257,19 @@ class SettingsNavigationStackHook: ClassHook<UINavigationController> {
                 // Galician
                 "Configuración", "Preferencias",
             ]
+            
             if let title = targetVC.title, settingsTitles.contains(title) {
                 injectEeveeButton(into: targetVC)
                 return
             }
             
-            // Controlla anche classi che contengono "Settings" o "Profile"
-            if (className.contains("Settings") || className.contains("Profile")) && !className.contains("Eevee") {
+            if className.contains("Settings") && !className.contains("Eevee") {
+                injectEeveeButton(into: targetVC)
+                return
+            }
+            
+            // AGGIUNTA: controlla anche classi con "Profile"
+            if className.contains("Profile") && !className.contains("Eevee") {
                 injectEeveeButton(into: targetVC)
                 return
             }
@@ -294,6 +277,6 @@ class SettingsNavigationStackHook: ClassHook<UINavigationController> {
         
         checkBlock()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: checkBlock)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: checkBlock) // Secondo tentativo
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: checkBlock) // secondo tentativo
     }
 }
