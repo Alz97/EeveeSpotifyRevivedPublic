@@ -10,14 +10,6 @@ import Foundation
 
 struct SessionLogoutHookGroup: HookGroup { }
 
-// Ably action name mapping for readable logs
-private let ablyActionNames: [Int: String] = [
-    0: "heartbeat", 1: "ack", 2: "nack", 3: "connect", 4: "connected",
-    5: "disconnect", 6: "disconnected", 7: "close", 8: "closed", 9: "error",
-    10: "attach", 11: "attached", 12: "detach", 13: "detached",
-    14: "presence", 15: "message", 16: "sync", 17: "auth"
-]
-
 // MARK: - SPTAuthSessionImplementation — Core Session Hooks
 
 class SPTAuthSessionHook: ClassHook<NSObject> {
@@ -33,22 +25,18 @@ class SPTAuthSessionHook: ClassHook<NSObject> {
         }
     }
 
-    // The MAIN logout entry point — logoutWithReason: is what's actually called
-    // when the session is detected as invalid/expired
     func logoutWithReason(_ reason: AnyObject) {
         if SPTAuthSessionHook.allowLogout {
             orig.logoutWithReason(reason)
         }
     }
 
-    // Block the delegate notification that triggers downstream logout cascade
     func callSessionDidLogoutOnDelegateWithReason(_ reason: AnyObject) {
         if SPTAuthSessionHook.allowLogout {
             orig.callSessionDidLogoutOnDelegateWithReason(reason)
         }
     }
 
-    // Block analytics logging for logout events
     func logWillLogoutEventWithLogoutReason(_ reason: AnyObject) {
         if SPTAuthSessionHook.allowLogout {
             orig.logWillLogoutEventWithLogoutReason(reason)
@@ -77,11 +65,10 @@ class SessionServiceImplHook: ClassHook<NSObject> {
     static let targetName = "_TtC24Connectivity_SessionImpl18SessionServiceImpl"
 
     func automatedLogoutThenLogin() {
+        // Block automated logout
     }
 
     func userInitiatedLogout() {
-        // The C++ timer calls this via Swift vtable dispatch, NOT from the main thread.
-        // Real user taps go through the main thread. Only allow if on main thread.
         if Thread.isMainThread {
             SPTAuthSessionHook.allowLogout = true
             orig.userInitiatedLogout()
@@ -138,10 +125,8 @@ class OauthAccessTokenBridgeHook: ClassHook<NSObject> {
     typealias Group = SessionLogoutHookGroup
     static let targetName = "_TtC24Connectivity_SessionImplP33_831B98CC28223E431E21CD27ADD20AF222OauthAccessTokenBridge"
 
-    // Hook the GETTER
     func expiresAt() -> Any {
-        let farFuture = Date(timeIntervalSinceNow: 365 * 24 * 60 * 60)
-        return farFuture
+        return Date(timeIntervalSinceNow: 365 * 24 * 60 * 60)
     }
 
     func setExpiresAt(_ date: Any) {
@@ -149,12 +134,9 @@ class OauthAccessTokenBridgeHook: ClassHook<NSObject> {
         orig.setExpiresAt(farFuture)
     }
 
-    // Hook init to directly modify the ivar using ObjC runtime
-    // This catches cases where C++ sets the ivar without going through the ObjC setter
     func `init`() -> NSObject? {
         let result = orig.`init`()
         extendExpiryIvar()
-        // Also start a repeating timer to keep extending the ivar
         startExpiryExtender()
         return result
     }
@@ -171,7 +153,6 @@ class OauthAccessTokenBridgeHook: ClassHook<NSObject> {
     // orion:new
     func startExpiryExtender() {
         let weak = target
-        // Extend the ivar every 60 seconds
         DispatchQueue.global(qos: .utility).async {
             while true {
                 Thread.sleep(forTimeInterval: 60)
@@ -186,18 +167,10 @@ class OauthAccessTokenBridgeHook: ClassHook<NSObject> {
     }
 }
 
-
-
-// NOTE: ColdStartupTimeKeeperImplementation is a pure Swift class (not NSObject).
-// Cannot hook it with Orion — crashes with targetHasIncompatibleType.
-// NOTE: executeBlockRunner on SPTAsyncNativeTimerManagerThreadImpl is too broad —
-// blocking it kills ALL timers including playback advancement.
-
 // MARK: - Ably WebSocket Transport Hooks
 // Intercepts Ably real-time messages to block server-side logout/revocation events
 
-// Blocked Ably protocol actions:
-// 5=disconnect, 6=disconnected, 7=close, 8=closed, 9=error, 12=detach, 13=detached, 17=auth
+// Blocked Ably protocol actions: 5=disconnect, 6=disconnected, 7=close, 8=closed, 9=error, 12=detach, 13=detached, 17=auth
 private let blockedAblyActions: Set<Int> = [5, 6, 7, 8, 9, 12, 13, 17]
 
 private func extractAblyAction(_ text: String) -> Int? {
@@ -212,18 +185,16 @@ class ARTWebSocketTransportHook: ClassHook<NSObject> {
     static let targetName = "ARTWebSocketTransport"
 
     func webSocket(_ ws: AnyObject, didReceiveMessage message: AnyObject) {
-        if let msgString = message as? String {
-            if let action = extractAblyAction(msgString) {
-                let actionName = ablyActionNames[action] ?? "unknown"
-                if blockedAblyActions.contains(action) {)
-                    return
-                }
-            }
+        if let msgString = message as? String,
+           let action = extractAblyAction(msgString),
+           blockedAblyActions.contains(action) {
+            return
         }
         orig.webSocket(ws, didReceiveMessage: message)
     }
 
     func webSocket(_ ws: AnyObject, didFailWithError error: AnyObject) {
+        // Silently ignore errors
     }
 }
 
@@ -235,13 +206,10 @@ class ARTSRWebSocketHook: ClassHook<NSObject> {
 
     func _handleFrameWithData(_ data: NSData, opCode code: Int) {
         if code == 1,
-           let text = String(data: data as Data, encoding: .utf8) {
-            if let action = extractAblyAction(text) {
-                let actionName = ablyActionNames[action] ?? "unknown"
-                if blockedAblyActions.contains(action) {
-                    return
-                }
-            }
+           let text = String(data: data as Data, encoding: .utf8),
+           let action = extractAblyAction(text),
+           blockedAblyActions.contains(action) {
+            return
         }
         orig._handleFrameWithData(data, opCode: code)
     }
@@ -259,31 +227,9 @@ class URLSessionTaskResumeHook: ClassHook<NSObject> {
            let host = url.host?.lowercased() {
 
             let elapsed = Date().timeIntervalSince(tweakInitTime)
-            let elapsedInt = Int(elapsed)
-            let path = url.path
-
-            // Log auth-related requests for diagnostics
-            let isAuthRelated = host.contains("login5") ||
-                host.contains("apresolve") ||
-                (host.contains("googleapis.com") && path.contains("/token")) ||
-                path.contains("bootstrap/v1/bootstrap") ||
-                path.contains("DeleteToken") ||
-                path.contains("signup/public") ||
-                path.contains("pses/screenconfig") ||
-                path.contains("logout") ||
-                path.contains("sign-out") ||
-                path.contains("session/purge") ||
-                path.contains("token/revoke") ||
-                path.contains("auth/expire") ||
-                path.contains("product-state") ||
-                path.contains("melody") ||
-                path.contains("auth/v1")
-
-            if isAuthRelated {
-                let method = task.currentRequest?.httpMethod ?? "?"
-            }
 
             // Block outgoing DeleteToken/signup requests at network level
+            // Only block after initial startup (30s) to allow fresh login/signup
             if host.contains("spotify") || host.contains("spclient") {
                 if elapsed > 30 && path.contains("DeleteToken") {
                     task.cancel()
@@ -297,12 +243,10 @@ class URLSessionTaskResumeHook: ClassHook<NSObject> {
                     task.cancel()
                     return
                 }
-                // Block bootstrap re-fetch after initial startup
                 if elapsed > 30 && path.contains("bootstrap/v1/bootstrap") {
                     task.cancel()
                     return
                 }
-                // Block apresolve after initial startup (precedes reinit)
                 if elapsed > 30 && host.contains("apresolve") {
                     task.cancel()
                     return
@@ -312,5 +256,3 @@ class URLSessionTaskResumeHook: ClassHook<NSObject> {
         orig.resume()
     }
 }
-
-
