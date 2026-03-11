@@ -10,6 +10,14 @@ import Foundation
 
 struct SessionLogoutHookGroup: HookGroup { }
 
+// Ably action name mapping for readable logs
+private let ablyActionNames: [Int: String] = [
+    0: "heartbeat", 1: "ack", 2: "nack", 3: "connect", 4: "connected",
+    5: "disconnect", 6: "disconnected", 7: "close", 8: "closed", 9: "error",
+    10: "attach", 11: "attached", 12: "detach", 13: "detached",
+    14: "presence", 15: "message", 16: "sync", 17: "auth"
+]
+
 // MARK: - SPTAuthSessionImplementation — Core Session Hooks
 
 class SPTAuthSessionHook: ClassHook<NSObject> {
@@ -20,6 +28,7 @@ class SPTAuthSessionHook: ClassHook<NSObject> {
     static var allowLogout = false
 
     func logout() {
+        let elapsed = Int(Date().timeIntervalSince(tweakInitTime))
         if SPTAuthSessionHook.allowLogout {
             orig.logout()
         }
@@ -28,6 +37,7 @@ class SPTAuthSessionHook: ClassHook<NSObject> {
     // The MAIN logout entry point — logoutWithReason: is what's actually called
     // when the session is detected as invalid/expired
     func logoutWithReason(_ reason: AnyObject) {
+        let elapsed = Int(Date().timeIntervalSince(tweakInitTime))
         if SPTAuthSessionHook.allowLogout {
             orig.logoutWithReason(reason)
         }
@@ -35,6 +45,7 @@ class SPTAuthSessionHook: ClassHook<NSObject> {
 
     // Block the delegate notification that triggers downstream logout cascade
     func callSessionDidLogoutOnDelegateWithReason(_ reason: AnyObject) {
+        let elapsed = Int(Date().timeIntervalSince(tweakInitTime))
         if SPTAuthSessionHook.allowLogout {
             orig.callSessionDidLogoutOnDelegateWithReason(reason)
         }
@@ -42,24 +53,26 @@ class SPTAuthSessionHook: ClassHook<NSObject> {
 
     // Block analytics logging for logout events
     func logWillLogoutEventWithLogoutReason(_ reason: AnyObject) {
+        let elapsed = Int(Date().timeIntervalSince(tweakInitTime))
         if SPTAuthSessionHook.allowLogout {
             orig.logWillLogoutEventWithLogoutReason(reason)
         }
     }
 
     func destroy() {
+        let elapsed = Int(Date().timeIntervalSince(tweakInitTime))
         if SPTAuthSessionHook.allowLogout {
             orig.destroy()
-        } else {
-            writeDebugLog("Blocked session destroy")
         }
     }
 
     func productStateUpdated(_ state: AnyObject) {
+        let elapsed = Int(Date().timeIntervalSince(tweakInitTime))
         orig.productStateUpdated(state)
     }
 
     func tryReconnect(_ arg1: AnyObject, toAP arg2: AnyObject) {
+        let elapsed = Int(Date().timeIntervalSince(tweakInitTime))
         orig.tryReconnect(arg1, toAP: arg2)
     }
 }
@@ -71,9 +84,11 @@ class SessionServiceImplHook: ClassHook<NSObject> {
     static let targetName = "_TtC24Connectivity_SessionImpl18SessionServiceImpl"
 
     func automatedLogoutThenLogin() {
+        let elapsed = Int(Date().timeIntervalSince(tweakInitTime))
     }
 
     func userInitiatedLogout() {
+        let elapsed = Int(Date().timeIntervalSince(tweakInitTime))
         // The C++ timer calls this via Swift vtable dispatch, NOT from the main thread.
         // Real user taps go through the main thread. Only allow if on main thread.
         if Thread.isMainThread {
@@ -86,6 +101,7 @@ class SessionServiceImplHook: ClassHook<NSObject> {
     }
 
     func sessionDidLogout(_ session: AnyObject, withReason reason: AnyObject) {
+        let elapsed = Int(Date().timeIntervalSince(tweakInitTime))
         if SPTAuthSessionHook.allowLogout {
             orig.sessionDidLogout(session, withReason: reason)
         }
@@ -99,24 +115,28 @@ class LegacyLoginControllerHook: ClassHook<NSObject> {
     static let targetName = "SPTAuthLegacyLoginControllerImplementation"
 
     func sessionDidLogout(_ session: AnyObject, withReason reason: AnyObject) {
+        let elapsed = Int(Date().timeIntervalSince(tweakInitTime))
         if SPTAuthSessionHook.allowLogout {
             orig.sessionDidLogout(session, withReason: reason)
         }
     }
 
     func destroySession() {
+        let elapsed = Int(Date().timeIntervalSince(tweakInitTime))
         if SPTAuthSessionHook.allowLogout {
             orig.destroySession()
         }
     }
 
     func forgetStoredCredentials() {
+        let elapsed = Int(Date().timeIntervalSince(tweakInitTime))
         if SPTAuthSessionHook.allowLogout {
             orig.forgetStoredCredentials()
         }
     }
 
     func invalidate() {
+        let elapsed = Int(Date().timeIntervalSince(tweakInitTime))
         if SPTAuthSessionHook.allowLogout {
             orig.invalidate()
         }
@@ -208,7 +228,9 @@ class ARTWebSocketTransportHook: ClassHook<NSObject> {
     func webSocket(_ ws: AnyObject, didReceiveMessage message: AnyObject) {
         if let msgString = message as? String {
             if let action = extractAblyAction(msgString) {
+                let actionName = ablyActionNames[action] ?? "unknown"
                 if blockedAblyActions.contains(action) {
+                    let elapsed = Int(Date().timeIntervalSince(tweakInitTime))
                     return
                 }
             }
@@ -217,6 +239,7 @@ class ARTWebSocketTransportHook: ClassHook<NSObject> {
     }
 
     func webSocket(_ ws: AnyObject, didFailWithError error: AnyObject) {
+        let elapsed = Int(Date().timeIntervalSince(tweakInitTime))
     }
 }
 
@@ -230,7 +253,9 @@ class ARTSRWebSocketHook: ClassHook<NSObject> {
         if code == 1,
            let text = String(data: data as Data, encoding: .utf8) {
             if let action = extractAblyAction(text) {
+                let actionName = ablyActionNames[action] ?? "unknown"
                 if blockedAblyActions.contains(action) {
+                    let elapsed = Int(Date().timeIntervalSince(tweakInitTime))
                     return
                 }
             }
@@ -251,40 +276,52 @@ class URLSessionTaskResumeHook: ClassHook<NSObject> {
            let host = url.host?.lowercased() {
 
             let elapsed = Date().timeIntervalSince(tweakInitTime)
+            let elapsedInt = Int(elapsed)
             let path = url.path
 
-            // After initial startup (30s), block login5 re-auth requests.
-            if elapsed > 30 {
-                if host.contains("login5") {
-                    writeDebugLog("Blocked login5 re-auth at \(Int(elapsed))s")
-                    return
-                }
-                // Block Google OAuth token refresh (feeds into login5 v4)
-                if host.contains("googleapis.com") && path.contains("/token") {
-                    writeDebugLog("Blocked Google OAuth refresh at \(Int(elapsed))s")
-                    return
-                }
+            // Log auth-related requests for diagnostics
+            let isAuthRelated = host.contains("login5") ||
+                host.contains("apresolve") ||
+                (host.contains("googleapis.com") && path.contains("/token")) ||
+                path.contains("bootstrap/v1/bootstrap") ||
+                path.contains("DeleteToken") ||
+                path.contains("signup/public") ||
+                path.contains("pses/screenconfig") ||
+                path.contains("logout") ||
+                path.contains("sign-out") ||
+                path.contains("session/purge") ||
+                path.contains("token/revoke") ||
+                path.contains("auth/expire") ||
+                path.contains("product-state") ||
+                path.contains("melody") ||
+                path.contains("auth/v1")
+
+            if isAuthRelated {
+                let method = task.currentRequest?.httpMethod ?? "?"
             }
 
             // Block outgoing DeleteToken/signup requests at network level
             if host.contains("spotify") || host.contains("spclient") {
-                if path.contains("DeleteToken") {
+                if elapsed > 30 && path.contains("DeleteToken") {
+                    task.cancel()
                     return
                 }
-                if path.contains("signup/public") {
+                if elapsed > 30 && path.contains("signup/public") {
+                    task.cancel()
                     return
                 }
-                if path.contains("pses/screenconfig") {
+                if elapsed > 30 && path.contains("pses/screenconfig") {
+                    task.cancel()
                     return
                 }
                 // Block bootstrap re-fetch after initial startup
                 if elapsed > 30 && path.contains("bootstrap/v1/bootstrap") {
-                    writeDebugLog("Blocked bootstrap re-fetch at \(Int(elapsed))s")
+                    task.cancel()
                     return
                 }
                 // Block apresolve after initial startup (precedes reinit)
                 if elapsed > 30 && host.contains("apresolve") {
-                    writeDebugLog("Blocked apresolve at \(Int(elapsed))s")
+                    task.cancel()
                     return
                 }
             }
