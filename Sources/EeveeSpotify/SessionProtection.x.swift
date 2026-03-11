@@ -28,7 +28,6 @@ class SPTAuthSessionHook: ClassHook<NSObject> {
     static var allowLogout = false
 
     func logout() {
-        let elapsed = Int(Date().timeIntervalSince(tweakInitTime))
         if SPTAuthSessionHook.allowLogout {
             orig.logout()
         }
@@ -37,7 +36,6 @@ class SPTAuthSessionHook: ClassHook<NSObject> {
     // The MAIN logout entry point — logoutWithReason: is what's actually called
     // when the session is detected as invalid/expired
     func logoutWithReason(_ reason: AnyObject) {
-        let elapsed = Int(Date().timeIntervalSince(tweakInitTime))
         if SPTAuthSessionHook.allowLogout {
             orig.logoutWithReason(reason)
         }
@@ -45,7 +43,6 @@ class SPTAuthSessionHook: ClassHook<NSObject> {
 
     // Block the delegate notification that triggers downstream logout cascade
     func callSessionDidLogoutOnDelegateWithReason(_ reason: AnyObject) {
-        let elapsed = Int(Date().timeIntervalSince(tweakInitTime))
         if SPTAuthSessionHook.allowLogout {
             orig.callSessionDidLogoutOnDelegateWithReason(reason)
         }
@@ -53,26 +50,22 @@ class SPTAuthSessionHook: ClassHook<NSObject> {
 
     // Block analytics logging for logout events
     func logWillLogoutEventWithLogoutReason(_ reason: AnyObject) {
-        let elapsed = Int(Date().timeIntervalSince(tweakInitTime))
         if SPTAuthSessionHook.allowLogout {
             orig.logWillLogoutEventWithLogoutReason(reason)
         }
     }
 
     func destroy() {
-        let elapsed = Int(Date().timeIntervalSince(tweakInitTime))
         if SPTAuthSessionHook.allowLogout {
             orig.destroy()
         }
     }
 
     func productStateUpdated(_ state: AnyObject) {
-        let elapsed = Int(Date().timeIntervalSince(tweakInitTime))
         orig.productStateUpdated(state)
     }
 
     func tryReconnect(_ arg1: AnyObject, toAP arg2: AnyObject) {
-        let elapsed = Int(Date().timeIntervalSince(tweakInitTime))
         orig.tryReconnect(arg1, toAP: arg2)
     }
 }
@@ -84,11 +77,9 @@ class SessionServiceImplHook: ClassHook<NSObject> {
     static let targetName = "_TtC24Connectivity_SessionImpl18SessionServiceImpl"
 
     func automatedLogoutThenLogin() {
-        let elapsed = Int(Date().timeIntervalSince(tweakInitTime))
     }
 
     func userInitiatedLogout() {
-        let elapsed = Int(Date().timeIntervalSince(tweakInitTime))
         // The C++ timer calls this via Swift vtable dispatch, NOT from the main thread.
         // Real user taps go through the main thread. Only allow if on main thread.
         if Thread.isMainThread {
@@ -101,7 +92,6 @@ class SessionServiceImplHook: ClassHook<NSObject> {
     }
 
     func sessionDidLogout(_ session: AnyObject, withReason reason: AnyObject) {
-        let elapsed = Int(Date().timeIntervalSince(tweakInitTime))
         if SPTAuthSessionHook.allowLogout {
             orig.sessionDidLogout(session, withReason: reason)
         }
@@ -115,28 +105,24 @@ class LegacyLoginControllerHook: ClassHook<NSObject> {
     static let targetName = "SPTAuthLegacyLoginControllerImplementation"
 
     func sessionDidLogout(_ session: AnyObject, withReason reason: AnyObject) {
-        let elapsed = Int(Date().timeIntervalSince(tweakInitTime))
         if SPTAuthSessionHook.allowLogout {
             orig.sessionDidLogout(session, withReason: reason)
         }
     }
 
     func destroySession() {
-        let elapsed = Int(Date().timeIntervalSince(tweakInitTime))
         if SPTAuthSessionHook.allowLogout {
             orig.destroySession()
         }
     }
 
     func forgetStoredCredentials() {
-        let elapsed = Int(Date().timeIntervalSince(tweakInitTime))
         if SPTAuthSessionHook.allowLogout {
             orig.forgetStoredCredentials()
         }
     }
 
     func invalidate() {
-        let elapsed = Int(Date().timeIntervalSince(tweakInitTime))
         if SPTAuthSessionHook.allowLogout {
             orig.invalidate()
         }
@@ -229,8 +215,7 @@ class ARTWebSocketTransportHook: ClassHook<NSObject> {
         if let msgString = message as? String {
             if let action = extractAblyAction(msgString) {
                 let actionName = ablyActionNames[action] ?? "unknown"
-                if blockedAblyActions.contains(action) {
-                    let elapsed = Int(Date().timeIntervalSince(tweakInitTime))
+                if blockedAblyActions.contains(action) {)
                     return
                 }
             }
@@ -239,7 +224,6 @@ class ARTWebSocketTransportHook: ClassHook<NSObject> {
     }
 
     func webSocket(_ ws: AnyObject, didFailWithError error: AnyObject) {
-        let elapsed = Int(Date().timeIntervalSince(tweakInitTime))
     }
 }
 
@@ -255,7 +239,6 @@ class ARTSRWebSocketHook: ClassHook<NSObject> {
             if let action = extractAblyAction(text) {
                 let actionName = ablyActionNames[action] ?? "unknown"
                 if blockedAblyActions.contains(action) {
-                    let elapsed = Int(Date().timeIntervalSince(tweakInitTime))
                     return
                 }
             }
