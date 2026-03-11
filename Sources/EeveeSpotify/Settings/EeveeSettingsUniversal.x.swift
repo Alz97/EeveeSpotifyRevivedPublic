@@ -3,78 +3,101 @@ import SwiftUI
 import UIKit
 import Foundation
 
-// MARK: - Gruppo principale per l'integrazione delle impostazioni
+// Universal settings integration group (tutti gli hook appartengono a questo gruppo)
 struct UniversalSettingsIntegrationGroup: HookGroup { }
 
-// MARK: - Primary: ProfileSettingsSection hook (riga nel menu)
+// MARK: - Primary: ProfileSettingsSection hook for settings menu row
 class UniversalProfileSettingsSectionHook: ClassHook<NSObject> {
     typealias Group = UniversalSettingsIntegrationGroup
     static let targetName = "ProfileSettingsSection"
     
     func numberOfRows() -> Int {
-        return orig.numberOfRows() + 1
+        let original = orig.numberOfRows()
+        return original + 1
     }
     
     func didSelectRow(_ row: Int) {
         let originalRows = orig.numberOfRows()
+        
         if row == originalRows {
-            openEeveeSettings()
+            openEeveeSettingsFromHook()
             return
         }
+        
         orig.didSelectRow(row)
     }
     
     func cellForRow(_ row: Int) -> UITableViewCell {
         let originalRows = orig.numberOfRows()
+        
         if row == originalRows {
-            let cell = Dynamic.SPTSettingsTableViewCell
+            let settingsTableCell = Dynamic.SPTSettingsTableViewCell
                 .alloc(interface: SPTSettingsTableViewCell.self)
                 .initWithStyle(3, reuseIdentifier: "EeveeSpotify")
-            let tableViewCell = Dynamic.convert(cell, to: UITableViewCell.self)
+            
+            let tableViewCell = Dynamic.convert(settingsTableCell, to: UITableViewCell.self)
+            
             tableViewCell.accessoryView = type(
                 of: Dynamic.SPTDisclosureAccessoryView
                     .alloc(interface: SPTDisclosureAccessoryView.self)
-            ).disclosureAccessoryView()
+            )
+            .disclosureAccessoryView()
+            
             tableViewCell.textLabel?.text = "EeveeSpotify"
+            
             return tableViewCell
         }
+        
         return orig.cellForRow(row)
     }
     
-    private func openEeveeSettings() {
-        let root = WindowHelper.shared.findFirstViewController("RootSettingsViewController")
+    private func openEeveeSettingsFromHook() {
+        // Try to find the root settings controller
+        let rootSettingsController = WindowHelper.shared.findFirstViewController("RootSettingsViewController")
             ?? WindowHelper.shared.findFirstViewController("SettingsViewController")
             ?? WindowHelper.shared.findFirstViewController("ProfileViewController")
-        guard let rootController = root, let nav = rootController.navigationController else { return }
-        let vc = EeveeSettingsViewController(
+        
+        guard let rootController = rootSettingsController,
+              let navigationController = rootController.navigationController else {
+            return
+        }
+        
+        let eeveeSettingsController = EeveeSettingsViewController(
             rootController.view.bounds,
-            settingsView: AnyView(EeveeSettingsView(navigationController: nav)),
+            settingsView: AnyView(EeveeSettingsView(navigationController: navigationController)),
             navigationTitle: "EeveeSpotify"
         )
-        nav.pushViewController(vc, animated: true)
+        
+        navigationController.pushViewController(eeveeSettingsController, animated: true)
     }
 }
 
-// MARK: - Helper per iniettare il bottone a forma di ingranaggio
+// MARK: - Global Helper to avoid Orion Hooking Issues with setupEeveeButton
 func injectEeveeButton(into target: UIViewController) {
-    // Evita duplicati (tag 1337)
-    if let items = target.navigationItem.rightBarButtonItems, items.contains(where: { $0.tag == 1337 }) {
+    // Check if the button already exists in rightBarButtonItems
+    if let rightItems = target.navigationItem.rightBarButtonItems,
+       rightItems.contains(where: { $0.tag == 1337 }) {
         return
     }
     
     let button = UIButton(type: .system)
-    button.setImage(UIImage(systemName: "gearshape.fill"), for: .normal)
-    button.tintColor = .white
+    // Usa alwaysOriginal per mantenere il colore bianco anche in contesti con tint
+    let image = UIImage(systemName: "gearshape.fill")?.withRenderingMode(.alwaysOriginal)
+    button.setImage(image, for: .normal)
+    button.tintColor = .white // Forza bianco per visibilità su sfondi scuri
     
     let action = UIAction { [weak target] _ in
-        guard let target = target, let nav = target.navigationController else { return }
-        let vc = EeveeSettingsViewController(
+        guard let target = target, let navigationController = target.navigationController else { return }
+        
+        let eeveeSettingsController = EeveeSettingsViewController(
             target.view.bounds,
-            settingsView: AnyView(EeveeSettingsView(navigationController: nav)),
+            settingsView: AnyView(EeveeSettingsView(navigationController: navigationController)),
             navigationTitle: "EeveeSpotify"
         )
-        nav.pushViewController(vc, animated: true)
+        
+        navigationController.pushViewController(eeveeSettingsController, animated: true)
     }
+    
     button.addAction(action, for: .touchUpInside)
     
     let item = UIBarButtonItem(customView: button)
@@ -87,17 +110,18 @@ func injectEeveeButton(into target: UIViewController) {
     target.navigationItem.rightBarButtonItems = items
 }
 
-// MARK: - Fallback 1: Hook per SettingsViewController
+// MARK: - Fallback hooks (attivi solo se ProfileSettingsSection non esiste)
+
 class SettingsViewControllerHook: ClassHook<UIViewController> {
     typealias Group = UniversalSettingsIntegrationGroup
     static let targetName = "SettingsViewController"
-    
+
     func viewDidLoad() {
         orig.viewDidLoad()
         guard NSClassFromString("ProfileSettingsSection") == nil else { return }
         injectEeveeButton(into: target)
     }
-    
+
     func viewWillAppear(_ animated: Bool) {
         orig.viewWillAppear(animated)
         guard NSClassFromString("ProfileSettingsSection") == nil else { return }
@@ -111,17 +135,16 @@ class SettingsViewControllerHook: ClassHook<UIViewController> {
     }
 }
 
-// MARK: - Fallback 2: Hook per RootSettingsViewController
 class RootSettingsViewControllerHook: ClassHook<UIViewController> {
     typealias Group = UniversalSettingsIntegrationGroup
     static let targetName = "RootSettingsViewController"
-    
+
     func viewDidLoad() {
         orig.viewDidLoad()
         guard NSClassFromString("ProfileSettingsSection") == nil else { return }
         injectEeveeButton(into: target)
     }
-    
+
     func viewWillAppear(_ animated: Bool) {
         orig.viewWillAppear(animated)
         guard NSClassFromString("ProfileSettingsSection") == nil else { return }
@@ -135,17 +158,17 @@ class RootSettingsViewControllerHook: ClassHook<UIViewController> {
     }
 }
 
-// MARK: - Fallback 3: Hook per ProfileViewController (spesso il root delle impostazioni)
+// AGGIUNTO: Hook per ProfileViewController (spesso root delle impostazioni)
 class ProfileViewControllerHook: ClassHook<UIViewController> {
     typealias Group = UniversalSettingsIntegrationGroup
     static let targetName = "ProfileViewController"
-    
+
     func viewDidLoad() {
         orig.viewDidLoad()
         guard NSClassFromString("ProfileSettingsSection") == nil else { return }
         injectEeveeButton(into: target)
     }
-    
+
     func viewWillAppear(_ animated: Bool) {
         orig.viewWillAppear(animated)
         guard NSClassFromString("ProfileSettingsSection") == nil else { return }
@@ -159,115 +182,118 @@ class ProfileViewControllerHook: ClassHook<UIViewController> {
     }
 }
 
-// MARK: - Fallback 4: Hook per UINavigationController per intercettare la push di viewController con titolo "Settings"
 class SettingsNavigationStackHook: ClassHook<UINavigationController> {
     typealias Group = UniversalSettingsIntegrationGroup
-    
+
     func pushViewController(_ viewController: UIViewController, animated: Bool) {
         orig.pushViewController(viewController, animated: animated)
+        
         guard NSClassFromString("ProfileSettingsSection") == nil else { return }
         
         let targetVC = viewController
+        
         let checkBlock = {
             let className = String(describing: type(of: targetVC))
             
-            // Titoli delle impostazioni in moltissime lingue
+            // Lista completa dei titoli (come nell'originale)
             let settingsTitles: Set<String> = [
-                "Settings", "Preferences", "Einstellungen", "Präferenzen",
-                "Paramètres", "Préférences", "Configuración", "Ajustes",
-                "Impostazioni", "Preferenze", "Definições", "Configurações",
-                "Instellingen", "Voorkeuren", "Ayarlar", "Tercihler",
-                "Ustawienia", "Preferencje", "Настройки", "Параметры",
-                "Налаштування", "Параметри", "Nastavení", "Předvolby",
-                "Inställningar", "Innstillinger", "Indstillinger", "Asetukset",
-                "Beállítások", "Setări", "Preferințe", "Nastavenia",
-                "Postavke", "Podešavanja", "Nastavitve", "Настройки",
-                "Ρυθμίσεις", "Προτιμήσεις", "הגדרות", "העדפות",
-                "الإعدادات", "التفضيلات", "تنظیمات", "ترجیحات",
-                "設定", "環境設定", "설정", "환경설정", "设置", "偏好设置",
-                "設定", "偏好設定", "การตั้งค่า", "Cài đặt", "Tùy chọn",
-                "Pengaturan", "Setelan", "Preferensi", "Tetapan", "Keutamaan",
-                "Mga Setting", "Mga Kagustuhan", "सेटिंग", "प्राथमिकताएं",
-                "সেটিংস", "அமைப்புகள்", "Configuració", "Preferències",
-                "Ezarpenak", "Configuración", "Preferencias"
+                // English
+                "Settings", "Preferences",
+                // German
+                "Einstellungen", "Präferenzen",
+                // French
+                "Paramètres", "Préférences",
+                // Spanish
+                "Configuración", "Ajustes", "Preferencias",
+                // Italian
+                "Impostazioni", "Preferenze",
+                // Portuguese
+                "Definições", "Configurações", "Preferências",
+                // Dutch
+                "Instellingen", "Voorkeuren",
+                // Turkish
+                "Ayarlar", "Tercihler",
+                // Polish
+                "Ustawienia", "Preferencje",
+                // Russian
+                "Настройки", "Параметры",
+                // Ukrainian
+                "Налаштування", "Параметри",
+                // Czech
+                "Nastavení", "Předvolby",
+                // Swedish
+                "Inställningar",
+                // Norwegian
+                "Innstillinger",
+                // Danish
+                "Indstillinger",
+                // Finnish
+                "Asetukset",
+                // Hungarian
+                "Beállítások",
+                // Romanian
+                "Setări", "Preferințe",
+                // Slovak
+                "Nastavenia",
+                // Croatian/Bosnian/Serbian
+                "Postavke", "Podešavanja",
+                // Slovenian
+                "Nastavitve",
+                // Bulgarian
+                "Настройки",
+                // Greek
+                "Ρυθμίσεις", "Προτιμήσεις",
+                // Hebrew
+                "הגדרות", "העדפות",
+                // Arabic
+                "الإعدادات", "التفضيلات",
+                // Persian
+                "تنظیمات", "ترجیحات",
+                // Japanese
+                "設定", "環境設定",
+                // Korean
+                "설정", "환경설정",
+                // Chinese (Simplified)
+                "设置", "偏好设置",
+                // Chinese (Traditional)
+                "設定", "偏好設定",
+                // Thai
+                "การตั้งค่า",
+                // Vietnamese
+                "Cài đặt", "Tùy chọn",
+                // Indonesian
+                "Pengaturan", "Setelan", "Preferensi",
+                // Malay
+                "Tetapan", "Keutamaan",
+                // Filipino
+                "Mga Setting", "Mga Kagustuhan",
+                // Hindi
+                "सेटिंग", "प्राथमिकताएं",
+                // Bengali
+                "সেটিংস",
+                // Tamil
+                "அமைப்புகள்",
+                // Catalan
+                "Configuració", "Preferències",
+                // Basque
+                "Ezarpenak",
+                // Galician
+                "Configuración", "Preferencias",
             ]
-            
             if let title = targetVC.title, settingsTitles.contains(title) {
                 injectEeveeButton(into: targetVC)
                 return
             }
             
-            if className.contains("Settings") && !className.contains("Eevee") {
+            // Controlla anche classi che contengono "Settings" o "Profile"
+            if (className.contains("Settings") || className.contains("Profile")) && !className.contains("Eevee") {
                 injectEeveeButton(into: targetVC)
                 return
             }
         }
         
-        // Tentativi multipli
         checkBlock()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: checkBlock)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0, execute: checkBlock)
-    }
-}
-
-// MARK: - Fallback 5: Hook per SPTNavigationController (usato da Spotify)
-class SPTNavigationControllerHook: ClassHook<UINavigationController> {
-    typealias Group = UniversalSettingsIntegrationGroup
-    static let targetName = "SPTNavigationController"
-    
-    func viewDidLoad() {
-        orig.viewDidLoad()
-        guard NSClassFromString("ProfileSettingsSection") == nil else { return }
-        // Prova a iniettare nel topViewController se è una schermata di impostazioni
-        if let topVC = target.topViewController, isSettingsViewController(topVC) {
-            injectEeveeButton(into: topVC)
-        }
-    }
-    
-    func pushViewController(_ viewController: UIViewController, animated: Bool) {
-        orig.pushViewController(viewController, animated: animated)
-        guard NSClassFromString("ProfileSettingsSection") == nil else { return }
-        if isSettingsViewController(viewController) {
-            injectEeveeButton(into: viewController)
-        }
-    }
-    
-    private func isSettingsViewController(_ vc: UIViewController) -> Bool {
-        let className = String(describing: type(of: vc))
-        return className.contains("Settings") || className.contains("Profile")
-    }
-}
-
-// MARK: - Hook per UINavigationItem per prevenire la rimozione del bottone
-class UINavigationItemHook: ClassHook<UINavigationItem> {
-    typealias Group = UniversalSettingsIntegrationGroup
-    static let targetName = "UINavigationItem"
-    
-    func setRightBarButtonItems(_ items: [UIBarButtonItem]?, animated: Bool) {
-        // Se stanno per sovrascrivere i nostri items, reinseriamo il nostro
-        if let currentItems = target.rightBarButtonItems,
-           currentItems.contains(where: { $0.tag == 1337 }),
-           let newItems = items,
-           !newItems.contains(where: { $0.tag == 1337 }) {
-            var modifiedItems = newItems
-            let ourItem = currentItems.first(where: { $0.tag == 1337 })!
-            modifiedItems.insert(ourItem, at: 0)
-            orig.setRightBarButtonItems(modifiedItems, animated: animated)
-        } else {
-            orig.setRightBarButtonItems(items, animated: animated)
-        }
-    }
-}
-
-// MARK: - Attivazione all'interno del tweak principale
-struct EeveeSpotify: Tweak {
-    static let version = "6.6.0"
-    
-    init() {
-        // Attiva sempre il gruppo di integrazione (che contiene tutti gli hook)
-        UniversalSettingsIntegrationGroup().activate()
-        
-        // Se vuoi attivare anche altri gruppi (es. premium, lyrics), fallo qui
-        // ...
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: checkBlock)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: checkBlock) // Secondo tentativo
     }
 }
