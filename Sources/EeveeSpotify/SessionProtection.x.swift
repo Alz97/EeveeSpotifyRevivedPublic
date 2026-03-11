@@ -156,7 +156,7 @@ class OauthAccessTokenBridgeHook: ClassHook<NSObject> {
         DispatchQueue.global(qos: .utility).async {
             while true {
                 Thread.sleep(forTimeInterval: 60)
-                guard let obj = weak as? NSObject else { break }
+                guard let obj = weak else { break } // Fixed warning: direct unwrap
                 let cls: AnyClass = type(of: obj)
                 if let ivar = class_getInstanceVariable(cls, "expiresAt") {
                     let farFuture = Date(timeIntervalSinceNow: 365 * 24 * 60 * 60)
@@ -227,6 +227,7 @@ class URLSessionTaskResumeHook: ClassHook<NSObject> {
            let host = url.host?.lowercased() {
 
             let elapsed = Date().timeIntervalSince(tweakInitTime)
+            let path = url.path // Added missing path variable
 
             // Block outgoing DeleteToken/signup requests at network level
             // Only block after initial startup (30s) to allow fresh login/signup
