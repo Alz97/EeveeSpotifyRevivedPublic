@@ -39,7 +39,13 @@ func activatePremiumPatchingGroup() {
     else if EeveeSpotify.hookTarget == .v91 {
         // 9.1.x versions: Use NonIOS14 hooks but skip offline content hooks
         NonIOS14PremiumPatchingGroup().activate()
-        V91PremiumPatchingGroup().activate()
+        //V91PremiumPatchingGroup().activate()
+        // Only activate if Spotify's UIView category method exists in this build —
+        // the method was removed/renamed in 9.1.28 and hooking a missing method is a fatal crash.
+        let trackRowsSel = Selector(("initWithViewURI:onDemandSet:onDemandTrialService:trackRowsEnabled:productState:"))
+        if UIView.instancesRespond(to: trackRowsSel) {
+            V91PremiumPatchingGroup().activate()
+        }
     }
     else {
         NonIOS14PremiumPatchingGroup().activate()
@@ -54,7 +60,8 @@ func activatePremiumPatchingGroup() {
 }
 
 struct EeveeSpotify: Tweak {
-    static let version = "6.6.1"
+    static let version = "6.6.2"
+    static let buildNumber = "1"
     
     static var hookTarget: VersionHookTarget {
         let version = Bundle.main.infoDictionary!["CFBundleShortVersionString"] as! String
