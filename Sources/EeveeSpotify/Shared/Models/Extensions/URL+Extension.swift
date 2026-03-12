@@ -29,6 +29,10 @@ extension URL {
         self.path.contains("v1/bootstrap")
     }
 
+    var isDeviceCapabilities: Bool {
+        self.path.contains("v1/capabilities")
+    }
+
     // Blocked endpoint matchers (session protection)
 
     var isDeleteToken: Bool {
