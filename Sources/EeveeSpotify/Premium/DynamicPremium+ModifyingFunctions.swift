@@ -9,19 +9,6 @@ func modifyRemoteConfiguration(_ configuration: inout UcsResponse) {
     } else {
         modifyAssignedValues(&configuration.assignedValues)
     }
-    
-    // Modifica i flag HiFi sull'oggetto già decodificato
-    modifyHifiSupport(&configuration.resolve.configuration)
-}
-
-private func modifyHifiSupport(_ resolveConfig: inout ResolveConfiguration) {
-    // Supponendo che ResolveConfiguration abbia un campo supportsHifi di tipo SupportsHifi
-    // con proprietà userEligible e fullySupported (adattare i nomi reali)
-    if var supportsHifi = resolveConfig.supportsHifi {
-        supportsHifi.userEligible = true
-        supportsHifi.fullySupported = true
-        resolveConfig.supportsHifi = supportsHifi
-    }
 }
 
 private let propertyReplacements = [
