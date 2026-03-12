@@ -26,7 +26,7 @@ class SPTDataLoaderServiceHook: ClassHook<NSObject>, SpotifySessionDelegate {
         let shouldReplaceLyrics = BaseLyricsGroup.isActive
         
         return (shouldReplaceLyrics && url.isLyrics)
-            || (shouldPatchPremium && (url.isCustomize || url.isPremiumPlanRow || url.isPremiumBadge || url.isPlanOverview))
+            || (shouldPatchPremium && (url.isCustomize || url.isPremiumPlanRow || url.isPremiumBadge || url.isPlanOverview || url.isBootstrap))
     }
     
     // orion:new
@@ -55,6 +55,29 @@ class SPTDataLoaderServiceHook: ClassHook<NSObject>, SpotifySessionDelegate {
         } else if url.isSessionInvalidation {
             respondWithCustomData(Data(), task: task, session: session)
         }
+        orig.URLSession(session, task: task, didCompleteWithError: nil)
+    }
+    
+    // orion:new
+    private func handleBootstrap(_ data: Data, task: URLSessionDataTask, session: URLSession) throws {
+        guard var json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            // Se non è JSON, restituisci i dati originali
+            respondWithCustomData(data, task: task, session: session)
+            orig.URLSession(session, task: task, didCompleteWithError: nil)
+            return
+        }
+        
+        // Modifica supports_hifi
+        if var supportsHifi = json["supports_hifi"] as? [String: Any] {
+            supportsHifi["user_eligible"] = true
+            supportsHifi["fully_supported"] = true
+            json["supports_hifi"] = supportsHifi
+        }
+        // Opzionale: imposta anche audio_quality corrente
+        json["audio_quality"] = "HIFI"
+        
+        let newData = try JSONSerialization.data(withJSONObject: json)
+        respondWithCustomData(newData, task: task, session: session)
         orig.URLSession(session, task: task, didCompleteWithError: nil)
     }
     
@@ -157,6 +180,11 @@ class SPTDataLoaderServiceHook: ClassHook<NSObject>, SpotifySessionDelegate {
                 SPTDataLoaderServiceHook.cachedCustomizeData = modifiedData
                 respondWithCustomData(modifiedData, task: task, session: session)
                 orig.URLSession(session, task: task, didCompleteWithError: nil)
+                return
+            }
+            
+            if url.isBootstrap {
+                try handleBootstrap(buffer, task: task, session: session)
                 return
             }
             
