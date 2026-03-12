@@ -179,11 +179,6 @@ class SPTDataLoaderServiceHook: ClassHook<NSObject>, SpotifySessionDelegate {
                 orig.URLSession(session, task: task, didCompleteWithError: nil)
                 return
             }
-            
-            if url.isBootstrap {
-                try handleBootstrap(buffer, task: task, session: session)
-                return
-            }
 
             if url.isDeviceCapabilities {
                 try handleDeviceCapabilities(buffer, task: task, session: session)
