@@ -6,9 +6,29 @@ func modifyRemoteConfiguration(_ configuration: inout UcsResponse) {
     
     if UserDefaults.overwriteConfiguration {
         configuration.resolve.configuration = try! BundleHelper.shared.resolveConfiguration()
-    }
-    else {
+    } else {
         modifyAssignedValues(&configuration.assignedValues)
+    }
+    
+    // Aggiungi questa chiamata per forzare user_eligible e fully_supported a true
+    modifyHifiSupport(&configuration.resolve.configuration)
+}
+
+private func modifyHifiSupport(_ configData: inout Data?) {
+    guard let data = configData,
+          var json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          var supportsHifi = json["supports_hifi"] as? [String: Any] else {
+        return
+    }
+    
+    // Imposta i due flag a true
+    supportsHifi["user_eligible"] = true
+    supportsHifi["fully_supported"] = true
+    json["supports_hifi"] = supportsHifi
+    
+    // Ricodifica e sostituisci
+    if let newData = try? JSONSerialization.data(withJSONObject: json, options: []) {
+        configData = newData
     }
 }
 
