@@ -184,34 +184,32 @@ class SPTSessionManagerHook: ClassHook<NSObject> {
         }
 
         // Esegui la richiesta di refresh token
-        performTokenRefresh(refreshToken: refreshToken, clientID: clientID) { [weak target] success, tokenData in
-            guard let target = target else { return }
+        performTokenRefresh(refreshToken: refreshToken, clientID: clientID) { [weak target, weak session] success, tokenData in
+            guard let target = target, let session = session else { return }
 
             if success,
                let tokenData = tokenData,
                let newAccessToken = tokenData["access_token"] as? String,
                let expiresIn = tokenData["expires_in"] as? TimeInterval {
 
-                // Crea una nuova istanza di SPTSession (assumendo che esista)
-                if let newSession = NSClassFromString("SPTSession")?.alloc() as? NSObject {
-                    // Imposta i valori via KVC (adatta i nomi delle chiavi se necessario)
-                    newSession.setValue(newAccessToken, forKey: "accessToken")
-                    newSession.setValue(refreshToken, forKey: "refreshToken")
-                    let expirationDate = Date(timeIntervalSinceNow: expiresIn)
-                    newSession.setValue(expirationDate, forKey: "expirationDate")
-
-                    // Aggiorna la proprietà 'session' del manager
-                    target.setValue(newSession, forKey: "session")
-
-                    // Notifica il delegato se risponde al metodo (assicurati di essere sul thread principale)
-                    DispatchQueue.main.async {
-                        if let delegate = target.value(forKey: "delegate") as? NSObject,
-                           delegate.responds(to: Selector(("sessionManager:didRenewSession:"))) {
-                            delegate.perform(Selector(("sessionManager:didRenewSession:")), with: target, with: newSession)
-                        }
-                    }
-                    return // Successo, non chiamiamo l'originale
+                // Aggiorna la sessione esistente con i nuovi valori
+                session.setValue(newAccessToken, forKey: "accessToken")
+                // Il refresh token potrebbe non cambiare, ma se presente nel JSON lo aggiorniamo
+                if let newRefreshToken = tokenData["refresh_token"] as? String {
+                    session.setValue(newRefreshToken, forKey: "refreshToken")
                 }
+                let expirationDate = Date(timeIntervalSinceNow: expiresIn)
+                session.setValue(expirationDate, forKey: "expirationDate")
+
+                // Notifica il delegato se risponde al metodo (assicurati di essere sul thread principale)
+                DispatchQueue.main.async {
+                    if let delegate = target.value(forKey: "delegate") as? NSObject,
+                       delegate.responds(to: Selector(("sessionManager:didRenewSession:"))) {
+                        delegate.perform(Selector(("sessionManager:didRenewSession:")), with: target, with: session)
+                    }
+                }
+                // Non chiamiamo l'originale, abbiamo gestito il rinnovo
+                return
             }
 
             // Se qualcosa è andato storto, chiama l'originale come fallback
