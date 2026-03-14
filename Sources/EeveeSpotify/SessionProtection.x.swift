@@ -166,6 +166,82 @@ class OauthAccessTokenBridgeHook: ClassHook<NSObject> {
     }
 }
 
+// MARK: - SPTSessionManager Hook — Token Renewal Control
+
+class SPTSessionManagerHook: ClassHook<NSObject> {
+    typealias Group = SessionLogoutHookGroup
+    static let targetName = "SPTSessionManager"
+
+    func renewSession() {
+        // Estrai le informazioni necessarie: sessione corrente, refresh token e client ID
+        guard let session = target.value(forKey: "session") as? NSObject,
+              let refreshToken = session.value(forKey: "refreshToken") as? String,
+              let config = target.value(forKey: "configuration") as? NSObject,
+              let clientID = config.value(forKey: "clientID") as? String else {
+            // Se mancano dati, chiama l'originale (che potrebbe portare al logout)
+            orig.renewSession()
+            return
+        }
+
+        // Esegui la richiesta di refresh token
+        performTokenRefresh(refreshToken: refreshToken, clientID: clientID) { [weak target] success, tokenData in
+            guard let target = target else { return }
+
+            if success,
+               let tokenData = tokenData,
+               let newAccessToken = tokenData["access_token"] as? String,
+               let expiresIn = tokenData["expires_in"] as? TimeInterval {
+
+                // Crea una nuova istanza di SPTSession (assumendo che esista)
+                if let newSession = NSClassFromString("SPTSession")?.alloc() as? NSObject {
+                    // Imposta i valori via KVC (adatta i nomi delle chiavi se necessario)
+                    newSession.setValue(newAccessToken, forKey: "accessToken")
+                    newSession.setValue(refreshToken, forKey: "refreshToken")
+                    let expirationDate = Date(timeIntervalSinceNow: expiresIn)
+                    newSession.setValue(expirationDate, forKey: "expirationDate")
+
+                    // Aggiorna la proprietà 'session' del manager
+                    target.setValue(newSession, forKey: "session")
+
+                    // Notifica il delegato se risponde al metodo (assicurati di essere sul thread principale)
+                    DispatchQueue.main.async {
+                        if let delegate = target.value(forKey: "delegate") as? NSObject,
+                           delegate.responds(to: Selector(("sessionManager:didRenewSession:"))) {
+                            delegate.perform(Selector(("sessionManager:didRenewSession:")), with: target, with: newSession)
+                        }
+                    }
+                    return // Successo, non chiamiamo l'originale
+                }
+            }
+
+            // Se qualcosa è andato storto, chiama l'originale come fallback
+            self.orig.renewSession()
+        }
+    }
+
+    private func performTokenRefresh(refreshToken: String, clientID: String, completion: @escaping (Bool, [String: Any]?) -> Void) {
+        let url = URL(string: "https://accounts.spotify.com/api/token")!
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+
+        let body = "grant_type=refresh_token&refresh_token=\(refreshToken)&client_id=\(clientID)"
+        request.httpBody = body.data(using: .utf8)
+
+        let task = URLSession.shared.dataTask(with: request) { data, response, error in
+            guard let data = data,
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  error == nil,
+                  (response as? HTTPURLResponse)?.statusCode == 200 else {
+                completion(false, nil)
+                return
+            }
+            completion(true, json)
+        }
+        task.resume()
+    }
+}
+
 // MARK: - Ably WebSocket Transport Hooks
 // Intercepts Ably real-time messages to block server-side logout/revocation events
 
