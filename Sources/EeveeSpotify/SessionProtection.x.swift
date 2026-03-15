@@ -166,34 +166,6 @@ class OauthAccessTokenBridgeHook: ClassHook<NSObject> {
     }
 }
 
-// MARK: - SPTSessionManager Hook — Token Renewal Control
-class SPTSessionManagerHook: ClassHook<NSObject> {
-    typealias Group = SessionLogoutHookGroup
-    static let targetName = "SPTSessionManager"
-
-    func renewSession() {
-        // Chiamiamo prima l'originale (il refresh standard)
-        orig.renewSession()
-        
-        // Dopo un breve ritardo, controlliamo se la sessione è ancora valida
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak target] in
-            guard let target = target else { return }
-            
-            // Verifichiamo se la sessione esiste e se è valida in modo sicuro
-            if let session = target.value(forKey: "session") as? NSObject {
-                // Se la sessione è presente, proviamo a vedere se ha un metodo "isValid"
-                if session.responds(to: Selector(("isValid"))) {
-                    let isValid = session.perform(Selector(("isValid")))?.takeUnretainedValue() as? Bool ?? false
-                    if !isValid {
-                        // La sessione non è valida: potremmo tentare un nuovo refresh?
-                        // Ma per ora non facciamo nulla per evitare cicli.
-                    }
-                }
-            }
-        }
-    }
-}
-
 // MARK: - Ably WebSocket Transport Hooks
 // Intercepts Ably real-time messages to block server-side logout/revocation events
 
