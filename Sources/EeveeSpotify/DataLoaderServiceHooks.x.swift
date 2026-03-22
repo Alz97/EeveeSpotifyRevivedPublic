@@ -58,26 +58,6 @@ class SPTDataLoaderServiceHook: ClassHook<NSObject>, SpotifySessionDelegate {
         orig.URLSession(session, task: task, didCompleteWithError: nil)
     }
 
-    // orion:new
-    private func handleDeviceCapabilities(_ data: Data, task: URLSessionDataTask, session: URLSession) throws {
-        guard var json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            respondWithCustomData(data, task: task, session: session)
-            orig.URLSession(session, task: task, didCompleteWithError: nil)
-            return
-        }
-    
-        // Modifica supports_hifi
-        if var supportsHifi = json["supports_hifi"] as? [String: Any] {
-            supportsHifi["user_eligible"] = true
-            supportsHifi["fully_supported"] = true
-            json["supports_hifi"] = supportsHifi
-        }
-    
-        let newData = try JSONSerialization.data(withJSONObject: json)
-        respondWithCustomData(newData, task: task, session: session)
-        orig.URLSession(session, task: task, didCompleteWithError: nil)
-    }
-    
     func URLSession(
         _ session: URLSession,
         task: URLSessionDataTask,
@@ -180,8 +160,11 @@ class SPTDataLoaderServiceHook: ClassHook<NSObject>, SpotifySessionDelegate {
                 return
             }
 
+            // Device capabilities is handled only by the original data (no Hi-Fi modifications)
             if url.isDeviceCapabilities {
-                try handleDeviceCapabilities(buffer, task: task, session: session)
+                // Pass through original data unchanged
+                respondWithCustomData(buffer, task: task, session: session)
+                orig.URLSession(session, task: task, didCompleteWithError: nil)
                 return
             }
             
