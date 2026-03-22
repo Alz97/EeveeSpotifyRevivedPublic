@@ -9,9 +9,6 @@ import Foundation
 // Extends OAuth token expiry to prevent internal reauth triggers.
 // NEW: Adds manual refresh token handling using official Spotify SDK classes.
 
-// MARK: - Global helpers
-let tweakInitTime = Date() // used for time-based blockingù
-
 // MARK: - Session Logout Protection Group
 struct SessionLogoutHookGroup: HookGroup { }
 
