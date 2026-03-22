@@ -22,7 +22,7 @@ class SPTDataLoaderServiceHook: ClassHook<NSObject>, SpotifySessionDelegate {
         let shouldReplaceLyrics = BaseLyricsGroup.isActive
         
         return (shouldReplaceLyrics && url.isLyrics)
-            || (shouldPatchPremium && (url.isCustomize || url.isPremiumPlanRow || url.isPremiumBadge || url.isPlanOverview || url.isDeviceCapabilities))
+            || (shouldPatchPremium && (url.isCustomize || url.isPremiumPlanRow || url.isPremiumBadge || url.isPlanOverview ))
     }
     
     func respondWithCustomData(_ data: Data, task: URLSessionDataTask, session: URLSession) {
@@ -150,13 +150,6 @@ class SPTDataLoaderServiceHook: ClassHook<NSObject>, SpotifySessionDelegate {
                 return
             }
 
-            if url.isDeviceCapabilities {
-                // Pass through original data (Hi-Fi removed)
-                respondWithCustomData(buffer, task: task, session: session)
-                orig.URLSession(session, task: task, didCompleteWithError: nil)
-                return
-            }
-            
             if url.isPlanOverview {
                 respondWithCustomData(try getPlanOverviewData(), task: task, session: session)
                 orig.URLSession(session, task: task, didCompleteWithError: nil)
