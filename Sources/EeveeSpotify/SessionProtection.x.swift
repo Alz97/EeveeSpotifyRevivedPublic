@@ -9,15 +9,14 @@ import Foundation
 // Extends OAuth token expiry to prevent internal reauth triggers.
 // NEW: Adds manual refresh token handling using official Spotify SDK classes.
 
+// MARK: - Session Logout Protection Group
 struct SessionLogoutHookGroup: HookGroup { }
 
 // MARK: - SPTAuthSessionImplementation — Core Session Hooks
-
 class SPTAuthSessionHook: ClassHook<NSObject> {
     typealias Group = SessionLogoutHookGroup
     static let targetName = "SPTAuthSessionImplementation"
 
-    // orion:new
     static var allowLogout = false
 
     func logout() {
@@ -60,7 +59,6 @@ class SPTAuthSessionHook: ClassHook<NSObject> {
 }
 
 // MARK: - SessionServiceImpl (Connectivity_SessionImpl module)
-
 class SessionServiceImplHook: ClassHook<NSObject> {
     typealias Group = SessionLogoutHookGroup
     static let targetName = "_TtC24Connectivity_SessionImpl18SessionServiceImpl"
@@ -87,7 +85,6 @@ class SessionServiceImplHook: ClassHook<NSObject> {
 }
 
 // MARK: - SPTAuthLegacyLoginControllerImplementation
-
 class LegacyLoginControllerHook: ClassHook<NSObject> {
     typealias Group = SessionLogoutHookGroup
     static let targetName = "SPTAuthLegacyLoginControllerImplementation"
@@ -117,18 +114,13 @@ class LegacyLoginControllerHook: ClassHook<NSObject> {
     }
 }
 
-// MARK: - OauthAccessTokenBridge — Extend token expiry and store refresh token
-// This private class inside Connectivity_SessionImpl controls the OAuth token's
-// expiry time. By hooking expiresAt to return a far-future date, we prevent
-// the internal timer from marking the token as expired.
-// NEW: Store the refresh token for manual refresh.
-
+// MARK: - OauthAccessTokenBridge — token expiry extender & manual refresh
 class OauthAccessTokenBridgeHook: ClassHook<NSObject> {
     typealias Group = SessionLogoutHookGroup
     static let targetName = "_TtC24Connectivity_SessionImplP33_831B98CC28223E431E21CD27ADD20AF222OauthAccessTokenBridge"
 
-    // NEW: Static storage for refresh token
     static var storedRefreshToken: String?
+    static let clientID = "8f1c2b8f6f0a4e4b8c8e2b0f4f8c8e2b"
 
     func expiresAt() -> Any {
         return Date(timeIntervalSinceNow: 365 * 24 * 60 * 60)
@@ -143,10 +135,14 @@ class OauthAccessTokenBridgeHook: ClassHook<NSObject> {
         let result = orig.`init`()
         extendExpiryIvar()
         startExpiryExtender()
+
+        if let refreshToken = target.value(forKey: "refreshToken") as? String {
+            OauthAccessTokenBridgeHook.storedRefreshToken = refreshToken
+        }
+        startProactiveRefresh()
         return result
     }
 
-    // orion:new
     func extendExpiryIvar() {
         let bridgeClass: AnyClass = type(of: target)
         if let ivar = class_getInstanceVariable(bridgeClass, "expiresAt") {
@@ -155,7 +151,6 @@ class OauthAccessTokenBridgeHook: ClassHook<NSObject> {
         }
     }
 
-    // orion:new
     func startExpiryExtender() {
         DispatchQueue.global(qos: .utility).async { [weak target] in
             while true {
@@ -170,132 +165,85 @@ class OauthAccessTokenBridgeHook: ClassHook<NSObject> {
         }
     }
 
-    // NEW: Hook setRefreshToken if exists (this method might not exist; we'll also try KVO)
-    // We'll use a more generic approach: whenever the token is set, we capture it.
-    // Since we can't guarantee the setter name, we'll instead hook the underlying property.
-    // For simplicity, we'll use KVO on the target if possible, but here we'll implement a method
-    // that might be called when the token is set. Alternatively, we can hook the setter via
-    // class_getInstanceMethod and swizzle. Orion's method hooking can be used if the method exists.
-    // The actual method name is likely "setRefreshToken:" or similar.
-    func setRefreshToken(_ token: Any) {
-        if let tokenString = token as? String {
-            OauthAccessTokenBridgeHook.storedRefreshToken = tokenString
-        }
-        orig.setRefreshToken(token)
-    }
-}
-
-// MARK: - SPTConfiguration Hook (official SDK) — to obtain clientID
-
-class SPTConfigurationHook: ClassHook<NSObject> {
-    typealias Group = SessionLogoutHookGroup
-    static let targetName = "SPTConfiguration"
-
-    static var clientID: String?
-    static var redirectURL: URL?
-
-    func initWithClientID(_ clientID: String, redirectURL: URL) -> NSObject? {
-        let result = orig.initWithClientID(clientID, redirectURL: redirectURL)
-        SPTConfigurationHook.clientID = clientID
-        SPTConfigurationHook.redirectURL = redirectURL
-        return result
-    }
-}
-
-// MARK: - SPTSessionManager Hook (official SDK) — manual token refresh
-
-class SPTSessionManagerHook: ClassHook<NSObject> {
-    typealias Group = SessionLogoutHookGroup
-    static let targetName = "SPTSessionManager"
-
-    func renewSession() {
-        guard let refreshToken = OauthAccessTokenBridgeHook.storedRefreshToken else {
-            orig.renewSession()
-            return
-        }
-
-        performManualTokenRefresh(refreshToken: refreshToken) { [weak self] success, tokens in
-            guard let self = self else { return }
-            if success,
-               let accessToken = tokens?["access_token"] as? String,
-               let expiresIn = tokens?["expires_in"] as? Int {
-
-                // Update current session via KVC (properties are public)
-                if let session = self.target.value(forKey: "session") as? NSObject {
-                    session.setValue(accessToken, forKey: "accessToken")
-                    session.setValue(refreshToken, forKey: "refreshToken")
-                    session.setValue(Date().addingTimeInterval(TimeInterval(expiresIn)), forKey: "expirationDate")
-                }
-
-                // Notify delegate if possible
-                if let delegate = self.target.value(forKey: "delegate") as? NSObject,
-                   delegate.responds(to: Selector(("sessionManager:didRenewSession:"))) {
-                    _ = delegate.perform(Selector(("sessionManager:didRenewSession:")), with: self.target, with: self.target.value(forKey: "session"))
-                }
-                return
+    func startProactiveRefresh() {
+        DispatchQueue.global(qos: .background).async { [weak self] in
+            while true {
+                Thread.sleep(forTimeInterval: 12 * 60 * 60)
+                guard let self = self else { break }
+                guard let refreshToken = OauthAccessTokenBridgeHook.storedRefreshToken else { continue }
+                self.performManualRefresh(refreshToken: refreshToken)
             }
-            // Fallback to original (which will likely fail and cause logout, but we've done our best)
-            self.orig.renewSession()
         }
     }
 
-    private func performManualTokenRefresh(refreshToken: String, completion: @escaping (Bool, [String: Any]?) -> Void) {
-        guard let clientID = SPTConfigurationHook.clientID else {
-            completion(false, nil)
-            return
-        }
-
+    func performManualRefresh(refreshToken: String) {
         let url = URL(string: "https://accounts.spotify.com/api/token")!
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-        let body = "grant_type=refresh_token&refresh_token=\(refreshToken)&client_id=\(clientID)"
+        let body = "grant_type=refresh_token&refresh_token=\(refreshToken)&client_id=\(OauthAccessTokenBridgeHook.clientID)"
         request.httpBody = body.data(using: .utf8)
 
-        let task = URLSession.shared.dataTask(with: request) { data, _, error in
+        let task = URLSession.shared.dataTask(with: request) { [weak self] data, _, error in
+            guard let self = self else { return }
             guard let data = data, error == nil,
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  json["access_token"] != nil else {
-                completion(false, nil)
+                  let accessToken = json["access_token"] as? String,
+                  let expiresIn = json["expires_in"] as? Int else {
                 return
             }
-            completion(true, json)
+            DispatchQueue.main.async {
+                self.target.setValue(accessToken, forKey: "accessToken")
+                self.target.setValue(Date().addingTimeInterval(TimeInterval(expiresIn)), forKey: "expiresAt")
+                if let newRefresh = json["refresh_token"] as? String {
+                    OauthAccessTokenBridgeHook.storedRefreshToken = newRefresh
+                    self.target.setValue(newRefresh, forKey: "refreshToken")
+                }
+            }
         }
         task.resume()
     }
 }
 
-// MARK: - SPTError Hook (official SDK) — block renew session errors
-
-// Since we can't import the SDK, we'll define the error domain and codes manually.
+// MARK: - Real Login Error Handlers
 let SPTLoginErrorDomain = "com.spotify.login"
-let SPTRenewSessionFailedErrorCode = 2  // from SPTErrorCode enum
+let SPTRenewSessionFailedErrorCode: UInt64 = 2
 
-class SPTErrorHook: ClassHook<NSError> {
+class SPTLoginErrorLoggerHook: ClassHook<NSObject> {
     typealias Group = SessionLogoutHookGroup
-    static let targetName = "SPTError"
+    static let targetName = "SPTLoginErrorLogger"
 
-    // Factory method: +errorWithCode:description:
-    func errorWithCode(_ code: UInt, description: String) -> NSError? {
+    func logErrorWithCode(_ code: UInt64, fieldidentifier: Any) {
         if code == SPTRenewSessionFailedErrorCode {
-            return nil  // suppress the error
+            // Silently drop the error
+            return
         }
-        return orig.errorWithCode(code, description: description)
+        orig.logErrorWithCode(code, fieldidentifier: fieldidentifier)
+    }
+}
+
+class SPTE2ELoginErrorTrackerHook: ClassHook<NSObject> {
+    typealias Group = SessionLogoutHookGroup
+    static let targetName = "SPTE2ELoginErrorTracker"
+
+    class func postLoginErrorNotificationWithError(_ error: Any) {
+        if let nsError = error as? NSError,
+           nsError.domain == SPTLoginErrorDomain,
+           nsError.code == Int(SPTRenewSessionFailedErrorCode) {
+            // Don't post notification
+            return
+        }
+        orig.postLoginErrorNotificationWithError(error)
     }
 
-    // Factory method: +errorWithCode:underlyingError:
-    func errorWithCode(_ code: UInt, underlyingError: NSError) -> NSError? {
-        if code == SPTRenewSessionFailedErrorCode {
-            return nil
-        }
-        return orig.errorWithCode(code, underlyingError: underlyingError)
+    func receivedNotificationNamed(_ name: Any) {
+        // Optionally inspect and block notifications related to refresh errors
+        // For safety, we still call original; the notification shouldn't be posted anyway.
+        orig.receivedNotificationNamed(name)
     }
 }
 
 // MARK: - Ably WebSocket Transport Hooks
-// Intercepts Ably real-time messages to block server-side logout/revocation events
-
-// Blocked Ably protocol actions: 5=disconnect, 6=disconnected, 7=close, 8=closed, 9=error, 12=detach, 13=detached, 17=auth
 private let blockedAblyActions: Set<Int> = [5, 6, 7, 8, 9, 12, 13, 17]
 
 private func extractAblyAction(_ text: String) -> Int? {
@@ -323,8 +271,6 @@ class ARTWebSocketTransportHook: ClassHook<NSObject> {
     }
 }
 
-// MARK: - Ably SRWebSocket Frame Hook
-
 class ARTSRWebSocketHook: ClassHook<NSObject> {
     typealias Group = SessionLogoutHookGroup
     static let targetName = "ARTSRWebSocket"
@@ -340,9 +286,7 @@ class ARTSRWebSocketHook: ClassHook<NSObject> {
     }
 }
 
-// MARK: - Global URLSessionTask hook to catch auth traffic bypassing SPTDataLoaderService
-// MODIFIED: Removed blocking of bootstrap/apresolve after 30s to allow proper session management.
-
+// MARK: - Global URLSessionTask hook
 class URLSessionTaskResumeHook: ClassHook<NSObject> {
     typealias Group = SessionLogoutHookGroup
     static let targetName = "NSURLSessionTask"
@@ -355,8 +299,6 @@ class URLSessionTaskResumeHook: ClassHook<NSObject> {
             let elapsed = Date().timeIntervalSince(tweakInitTime)
             let path = url.path
 
-            // Block outgoing DeleteToken/signup requests at network level
-            // Only block after initial startup (30s) to allow fresh login/signup
             if host.contains("spotify") || host.contains("spclient") {
                 if elapsed > 30 && path.contains("DeleteToken") {
                     task.cancel()
