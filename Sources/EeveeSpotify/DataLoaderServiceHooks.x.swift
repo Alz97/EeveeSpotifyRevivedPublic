@@ -1,9 +1,6 @@
 import Foundation
 import Orion
 
-// MARK: - Global helpers
-let tweakInitTime = Date() // used for time-based blocking
-
 // Global variable for access token (original)
 public var spotifyAccessToken: String?
 
