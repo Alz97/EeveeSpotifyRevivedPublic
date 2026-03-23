@@ -1,3 +1,4 @@
+
 import Orion
 import Foundation
 
@@ -7,7 +8,6 @@ import Foundation
 // Also intercepts Ably WebSocket messages to block server-side revocation events.
 // Additionally blocks network endpoints that trigger session invalidation.
 // Extends OAuth token expiry to prevent internal reauth triggers.
-// NEW: Manual refresh token handling via direct OAuth call.
 
 struct SessionLogoutHookGroup: HookGroup { }
 
@@ -17,6 +17,7 @@ class SPTAuthSessionHook: ClassHook<NSObject> {
     typealias Group = SessionLogoutHookGroup
     static let targetName = "SPTAuthSessionImplementation"
 
+    // orion:new
     static var allowLogout = false
 
     func logout() {
@@ -116,18 +117,14 @@ class LegacyLoginControllerHook: ClassHook<NSObject> {
     }
 }
 
-// MARK: - OauthAccessTokenBridge — Extend token expiry & manual refresh
-// NEW: Added manual refresh logic to keep the token alive without relying on Spotify's internal refresh.
+// MARK: - OauthAccessTokenBridge — Extend token expiry
+// This private class inside Connectivity_SessionImpl controls the OAuth token's
+// expiry time. By hooking expiresAt to return a far-future date, we prevent
+// the internal timer from marking the token as expired.
 
 class OauthAccessTokenBridgeHook: ClassHook<NSObject> {
     typealias Group = SessionLogoutHookGroup
     static let targetName = "_TtC24Connectivity_SessionImplP33_831B98CC28223E431E21CD27ADD20AF222OauthAccessTokenBridge"
-
-    // NEW: Store refresh token and client ID
-    static var storedRefreshToken: String?
-    // Known Spotify iOS client ID (fallback)
-    static let clientID = "8f1c2b8f6f0a4e4b8c8e2b0f4f8c8e2b"
-
     func expiresAt() -> Any {
         return Date(timeIntervalSinceNow: 365 * 24 * 60 * 60)
     }
@@ -141,13 +138,6 @@ class OauthAccessTokenBridgeHook: ClassHook<NSObject> {
         let result = orig.`init`()
         extendExpiryIvar()
         startExpiryExtender()
-
-        // NEW: Capture refresh token when the object is created
-        if let refreshToken = target.value(forKey: "refreshToken") as? String {
-            OauthAccessTokenBridgeHook.storedRefreshToken = refreshToken
-        }
-        // NEW: Start proactive refresh timer
-        startProactiveRefresh()
         return result
     }
 
@@ -174,56 +164,13 @@ class OauthAccessTokenBridgeHook: ClassHook<NSObject> {
             }
         }
     }
-
-    // NEW: Proactive refresh every 12 hours
-    func startProactiveRefresh() {
-        DispatchQueue.global(qos: .background).async { [weak self] in
-            while true {
-                Thread.sleep(forTimeInterval: 12 * 60 * 60) // 12 hours
-                guard let self = self else { break }
-                guard let refreshToken = OauthAccessTokenBridgeHook.storedRefreshToken else { continue }
-                self.performManualRefresh(refreshToken: refreshToken)
-            }
-        }
-    }
-
-    // NEW: Perform the actual token refresh using Spotify's OAuth endpoint
-    func performManualRefresh(refreshToken: String) {
-        let url = URL(string: "https://accounts.spotify.com/api/token")!
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-        let body = "grant_type=refresh_token&refresh_token=\(refreshToken)&client_id=\(OauthAccessTokenBridgeHook.clientID)"
-        request.httpBody = body.data(using: .utf8)
-
-        let task = URLSession.shared.dataTask(with: request) { [weak self] data, _, error in
-            guard let self = self else { return }
-            guard let data = data, error == nil,
-                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let accessToken = json["access_token"] as? String,
-                  let expiresIn = json["expires_in"] as? Int else {
-                return
-            }
-            DispatchQueue.main.async {
-                // Update the target's access token and expiry via KVC
-                self.target.setValue(accessToken, forKey: "accessToken")
-                self.target.setValue(Date().addingTimeInterval(TimeInterval(expiresIn)), forKey: "expiresAt")
-                // If a new refresh token is returned, store it
-                if let newRefresh = json["refresh_token"] as? String {
-                    OauthAccessTokenBridgeHook.storedRefreshToken = newRefresh
-                    self.target.setValue(newRefresh, forKey: "refreshToken")
-                }
-            }
-        }
-        task.resume()
-    }
 }
 
 // MARK: - Ably WebSocket Transport Hooks
 // Intercepts Ably real-time messages to block server-side logout/revocation events
 
+// Blocked Ably protocol actions: 5=disconnect, 6=disconnected, 7=close, 8=closed, 9=error, 12=detach, 13=detached, 17=auth
 private let blockedAblyActions: Set<Int> = [5, 6, 7, 8, 9, 12, 13, 17]
-
 private func extractAblyAction(_ text: String) -> Int? {
     guard let range = text.range(of: "\"action\":") else { return nil }
     let afterAction = text[range.upperBound...]
@@ -250,7 +197,6 @@ class ARTWebSocketTransportHook: ClassHook<NSObject> {
 }
 
 // MARK: - Ably SRWebSocket Frame Hook
-
 class ARTSRWebSocketHook: ClassHook<NSObject> {
     typealias Group = SessionLogoutHookGroup
     static let targetName = "ARTSRWebSocket"
@@ -267,8 +213,6 @@ class ARTSRWebSocketHook: ClassHook<NSObject> {
 }
 
 // MARK: - Global URLSessionTask hook to catch auth traffic bypassing SPTDataLoaderService
-// Note: You may want to remove the blocks for "bootstrap" and "apresolve" to allow proper session refresh.
-// They are currently still blocked. To unblock, comment out the respective lines.
 
 class URLSessionTaskResumeHook: ClassHook<NSObject> {
     typealias Group = SessionLogoutHookGroup
@@ -297,15 +241,14 @@ class URLSessionTaskResumeHook: ClassHook<NSObject> {
                     task.cancel()
                     return
                 }
-                // COMMENT OUT THE FOLLOWING TWO LINES TO AVOID INTERFERING WITH SESSION REFRESH
-                // if elapsed > 30 && path.contains("bootstrap/v1/bootstrap") {
-                //     task.cancel()
-                //     return
-                // }
-                // if elapsed > 30 && host.contains("apresolve") {
-                //     task.cancel()
-                //     return
-                // }
+                if elapsed > 30 && path.contains("bootstrap/v1/bootstrap") {
+                    task.cancel()
+                    return
+                }
+                if elapsed > 30 && host.contains("apresolve") {
+                    task.cancel()
+                    return
+                }
             }
         }
         orig.resume()
