@@ -219,40 +219,6 @@ class OauthAccessTokenBridgeHook: ClassHook<NSObject> {
     }
 }
 
-// MARK: - Error Logger Hooks (silence renew session errors)
-let SPTLoginErrorDomain = "com.spotify.login"
-let SPTRenewSessionFailedErrorCode: UInt64 = 2
-
-class SPTLoginErrorLoggerHook: ClassHook<NSObject> {
-    typealias Group = SessionLogoutHookGroup
-    static let targetName = "SPTLoginErrorLogger"
-
-    func logErrorWithCode(_ code: UInt64, fieldidentifier: Any) {
-        if code == SPTRenewSessionFailedErrorCode {
-            return
-        }
-        orig.logErrorWithCode(code, fieldidentifier: fieldidentifier)
-    }
-}
-
-class SPTE2ELoginErrorTrackerHook: ClassHook<NSObject> {
-    typealias Group = SessionLogoutHookGroup
-    static let targetName = "SPTE2ELoginErrorTracker"
-
-    class func postLoginErrorNotificationWithError(_ error: Any) {
-        if let nsError = error as? NSError,
-           nsError.domain == SPTLoginErrorDomain,
-           nsError.code == Int(SPTRenewSessionFailedErrorCode) {
-            return
-        }
-        orig.postLoginErrorNotificationWithError(error)
-    }
-
-    func receivedNotificationNamed(_ name: Any) {
-        orig.receivedNotificationNamed(name)
-    }
-}
-
 // MARK: - Ably WebSocket Transport Hooks
 // Intercepts Ably real-time messages to block server-side logout/revocation events
 
