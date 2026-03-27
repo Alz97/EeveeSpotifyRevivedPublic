@@ -39,7 +39,7 @@ class SPTDataLoaderServiceHook: ClassHook<NSObject>, SpotifySessionDelegate {
     func shouldBlock(_ url: URL) -> Bool {
         return url.isDeleteToken || url.isAccountValidate || url.isOndemandSelector
             || url.isTrialsFacade || url.isPremiumMarketing || url.isPendragonFetchMessageList
-            || url.isSessionInvalidation || url.isPushkaTokens
+            || url.isSessionInvalidation || url.isPushkaTokens || url.isSignup
     }
 
     // orion:new
