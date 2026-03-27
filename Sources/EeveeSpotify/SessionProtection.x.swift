@@ -263,6 +263,10 @@ class URLSessionTaskResumeHook: ClassHook<NSObject> {
                     task.cancel()
                     return
                 }
+                if elapsed > 30 && host.contains("signup/public/v1/account") {
+                    task.cancel()
+                    return
+                }
             }
         }
         orig.resume()
