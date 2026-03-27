@@ -2,21 +2,30 @@ import Foundation
 import Orion
 import os
 
-// Global variable for access token (thread-safe)
-public var spotifyAccessToken: String? {
-    get {
-        os_unfair_lock_lock(&tokenLock)
-        defer { os_unfair_lock_unlock(&tokenLock) }
-        return _spotifyAccessToken
-    }
-    set {
-        os_unfair_lock_lock(&tokenLock)
-        defer { os_unfair_lock_unlock(&tokenLock) }
-        _spotifyAccessToken = newValue
+// MARK: - Thread‑safe token storage
+private struct TokenStorage {
+    private static var _spotifyAccessToken: String?
+    private static var tokenLock = os_unfair_lock_s()
+    
+    static var spotifyAccessToken: String? {
+        get {
+            os_unfair_lock_lock(&tokenLock)
+            defer { os_unfair_lock_unlock(&tokenLock) }
+            return _spotifyAccessToken
+        }
+        set {
+            os_unfair_lock_lock(&tokenLock)
+            defer { os_unfair_lock_unlock(&tokenLock) }
+            _spotifyAccessToken = newValue
+        }
     }
 }
-private var _spotifyAccessToken: String?
-private static var tokenLock = os_unfair_lock_s()
+
+// Esponiamo la variabile pubblica tramite un computed property
+public var spotifyAccessToken: String? {
+    get { TokenStorage.spotifyAccessToken }
+    set { TokenStorage.spotifyAccessToken = newValue }
+}
 
 class SPTDataLoaderServiceHook: ClassHook<NSObject>, SpotifySessionDelegate {
     static let targetName = "SPTDataLoaderService"
@@ -150,7 +159,6 @@ class SPTDataLoaderServiceHook: ClassHook<NSObject>, SpotifySessionDelegate {
 
         // Avoid double processing for lyrics if we already served synthetic lyrics in didReceiveResponse
         if SPTDataLoaderServiceHook.handledLyricsTasks.remove(task.taskIdentifier) != nil {
-            // Already handled; just complete without error
             orig.URLSession(session, task: task, didCompleteWithError: nil)
             return
         }
