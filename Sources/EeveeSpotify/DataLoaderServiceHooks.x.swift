@@ -16,7 +16,7 @@ public var spotifyAccessToken: String? {
     }
 }
 private var _spotifyAccessToken: String?
-private static let tokenLock = os_unfair_lock_s()
+private static var tokenLock = os_unfair_lock_s()
 
 class SPTDataLoaderServiceHook: ClassHook<NSObject>, SpotifySessionDelegate {
     static let targetName = "SPTDataLoaderService"
@@ -35,7 +35,7 @@ class SPTDataLoaderServiceHook: ClassHook<NSObject>, SpotifySessionDelegate {
             _cachedCustomizeData = newValue
         }
     }
-    private static let customizeLock = os_unfair_lock_s()
+    private static var customizeLock = os_unfair_lock_s()
 
     // Tasks for which we already handled a 304 on /customize
     private static var _handledCustomizeTasks = Set<Int>()
@@ -51,7 +51,7 @@ class SPTDataLoaderServiceHook: ClassHook<NSObject>, SpotifySessionDelegate {
             _handledCustomizeTasks = newValue
         }
     }
-    private static let tasksLock = os_unfair_lock_s()
+    private static var tasksLock = os_unfair_lock_s()
 
     // Tasks for which we already replaced lyrics (avoid double processing)
     private static var _handledLyricsTasks = Set<Int>()
@@ -67,7 +67,7 @@ class SPTDataLoaderServiceHook: ClassHook<NSObject>, SpotifySessionDelegate {
             _handledLyricsTasks = newValue
         }
     }
-    private static let lyricsLock = os_unfair_lock_s()
+    private static var lyricsLock = os_unfair_lock_s()
 
     // Fake responses for blocked endpoints (consolidated)
     private static let emptyData = Data()
