@@ -75,11 +75,6 @@ class SPTDataLoaderServiceHook: ClassHook<NSObject>, SpotifySessionDelegate {
     private static let trialsFacadeResponse = "{\"result\":\"NOT_ELIGIBLE\"}".data(using: .utf8)!
     private static let premiumMarketingResponse = "{}".data(using: .utf8)!
 
-    // MARK: - Logging helper
-    private func log(_ message: String, file: String = #file, line: Int = #line, function: String = #function) {
-        NSLog("[SpotifyTweak] \(function): \(message)")
-    }
-
     // MARK: - URL filtering
     func shouldBlock(_ url: URL) -> Bool {
         return url.isDeleteToken || url.isAccountValidate || url.isOndemandSelector
@@ -170,8 +165,6 @@ class SPTDataLoaderServiceHook: ClassHook<NSObject>, SpotifySessionDelegate {
             if url.isCustomize, let cached = SPTDataLoaderServiceHook.cachedCustomizeData {
                 respondWithCustomData(cached, task: task, session: session)
                 orig.URLSession(session, task: task, didCompleteWithError: nil)
-            } else {
-                log("No buffer available for \(url)")
             }
             return
         }
@@ -190,7 +183,7 @@ class SPTDataLoaderServiceHook: ClassHook<NSObject>, SpotifySessionDelegate {
                             originalLyrics: originalLyrics
                         )
                     } catch {
-                        self.log("Failed to fetch custom lyrics: \(error)")
+                        // Silently ignore error, fallback to original lyrics
                     }
                     semaphore.signal()
                 }
@@ -204,7 +197,6 @@ class SPTDataLoaderServiceHook: ClassHook<NSObject>, SpotifySessionDelegate {
                     respondWithCustomData(data, task: task, session: session)
                     orig.URLSession(session, task: task, didCompleteWithError: nil)
                 } else {
-                    log("Lyrics timeout or failure, falling back to original")
                     respondWithCustomData(buffer, task: task, session: session)
                     orig.URLSession(session, task: task, didCompleteWithError: nil)
                 }
@@ -244,7 +236,6 @@ class SPTDataLoaderServiceHook: ClassHook<NSObject>, SpotifySessionDelegate {
                 return
             }
         } catch {
-            log("Error modifying endpoint \(url): \(error)")
             orig.URLSession(session, task: task, didCompleteWithError: error)
         }
     }
@@ -285,7 +276,6 @@ class SPTDataLoaderServiceHook: ClassHook<NSObject>, SpotifySessionDelegate {
             orig.URLSession(session, dataTask: task, didReceiveResponse: okResponse, completionHandler: handler)
             respondWithCustomData(data, task: task, session: session)
         } catch {
-            log("Failed to generate synthetic lyrics for 404: \(error)")
             orig.URLSession(session, task: task, didCompleteWithError: error)
         }
     }
