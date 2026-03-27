@@ -1,68 +1,50 @@
-import Foundation
 import Orion
-import os
+import Foundation
 
-enum AtomicOrdering {
-    case relaxed
-}
+// MARK: - Session Logout Protection
+// Hooks all logout-related methods to prevent Spotify from logging out
+// when it detects the account isn't actually premium.
+// Also intercepts Ably WebSocket messages to block server-side revocation events.
+// Additionally blocks network endpoints that trigger session invalidation.
+// Extends OAuth token expiry to prevent internal reauth triggers.
 
-final class AtomicBool {
-    private var value: Bool
-    private var lock = os_unfair_lock_s()
-    
-    init(_ initialValue: Bool) {
-        self.value = initialValue
-    }
-    
-    func load(ordering: AtomicOrdering) -> Bool {
-        os_unfair_lock_lock(&lock)
-        defer { os_unfair_lock_unlock(&lock) }
-        return value
-    }
-    
-    func store(_ newValue: Bool, ordering: AtomicOrdering) {
-        os_unfair_lock_lock(&lock)
-        value = newValue
-        os_unfair_lock_unlock(&lock)
-    }
-}
+struct SessionLogoutHookGroup: HookGroup { }
 
-// MARK: - SessionLogoutHookGroup (definita solo se non esiste già)
-class SessionLogoutHookGroup: HookGroup { }
+// MARK: - SPTAuthSessionImplementation — Core Session Hooks
 
-// MARK: - SPTAuthSessionHook
 class SPTAuthSessionHook: ClassHook<NSObject> {
     typealias Group = SessionLogoutHookGroup
     static let targetName = "SPTAuthSessionImplementation"
 
-    static let allowLogout = AtomicBool(false)   // ora è una classe, quindi let va bene
+    // orion:new
+    static var allowLogout = false
 
     func logout() {
-        if SPTAuthSessionHook.allowLogout.load(ordering: .relaxed) {
+        if SPTAuthSessionHook.allowLogout {
             orig.logout()
         }
     }
 
     func logoutWithReason(_ reason: AnyObject) {
-        if SPTAuthSessionHook.allowLogout.load(ordering: .relaxed) {
+        if SPTAuthSessionHook.allowLogout {
             orig.logoutWithReason(reason)
         }
     }
 
     func callSessionDidLogoutOnDelegateWithReason(_ reason: AnyObject) {
-        if SPTAuthSessionHook.allowLogout.load(ordering: .relaxed) {
+        if SPTAuthSessionHook.allowLogout {
             orig.callSessionDidLogoutOnDelegateWithReason(reason)
         }
     }
 
     func logWillLogoutEventWithLogoutReason(_ reason: AnyObject) {
-        if SPTAuthSessionHook.allowLogout.load(ordering: .relaxed) {
+        if SPTAuthSessionHook.allowLogout {
             orig.logWillLogoutEventWithLogoutReason(reason)
         }
     }
 
     func destroy() {
-        if SPTAuthSessionHook.allowLogout.load(ordering: .relaxed) {
+        if SPTAuthSessionHook.allowLogout {
             orig.destroy()
         }
     }
@@ -77,11 +59,10 @@ class SPTAuthSessionHook: ClassHook<NSObject> {
 }
 
 // MARK: - SessionServiceImpl (Connectivity_SessionImpl module)
+
 class SessionServiceImplHook: ClassHook<NSObject> {
     typealias Group = SessionLogoutHookGroup
     static let targetName = "_TtC24Connectivity_SessionImpl18SessionServiceImpl"
-
-    private static var resetWorkItem: DispatchWorkItem?
 
     func automatedLogoutThenLogin() {
         // Block automated logout
@@ -89,64 +70,60 @@ class SessionServiceImplHook: ClassHook<NSObject> {
 
     func userInitiatedLogout() {
         if Thread.isMainThread {
-            SessionServiceImplHook.resetWorkItem?.cancel()
-            SPTAuthSessionHook.allowLogout.store(true, ordering: .relaxed)
-
-            let workItem = DispatchWorkItem {
-                SPTAuthSessionHook.allowLogout.store(false, ordering: .relaxed)
-                SessionServiceImplHook.resetWorkItem = nil
-            }
-            SessionServiceImplHook.resetWorkItem = workItem
-            DispatchQueue.main.asyncAfter(deadline: .now() + 5, execute: workItem)
-
+            SPTAuthSessionHook.allowLogout = true
             orig.userInitiatedLogout()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
+                SPTAuthSessionHook.allowLogout = false
+            }
         }
     }
 
     func sessionDidLogout(_ session: AnyObject, withReason reason: AnyObject) {
-        if SPTAuthSessionHook.allowLogout.load(ordering: .relaxed) {
+        if SPTAuthSessionHook.allowLogout {
             orig.sessionDidLogout(session, withReason: reason)
         }
     }
 }
 
 // MARK: - SPTAuthLegacyLoginControllerImplementation
+
 class LegacyLoginControllerHook: ClassHook<NSObject> {
     typealias Group = SessionLogoutHookGroup
     static let targetName = "SPTAuthLegacyLoginControllerImplementation"
 
     func sessionDidLogout(_ session: AnyObject, withReason reason: AnyObject) {
-        if SPTAuthSessionHook.allowLogout.load(ordering: .relaxed) {
+        if SPTAuthSessionHook.allowLogout {
             orig.sessionDidLogout(session, withReason: reason)
         }
     }
 
     func destroySession() {
-        if SPTAuthSessionHook.allowLogout.load(ordering: .relaxed) {
+        if SPTAuthSessionHook.allowLogout {
             orig.destroySession()
         }
     }
 
     func forgetStoredCredentials() {
-        if SPTAuthSessionHook.allowLogout.load(ordering: .relaxed) {
+        if SPTAuthSessionHook.allowLogout {
             orig.forgetStoredCredentials()
         }
     }
 
     func invalidate() {
-        if SPTAuthSessionHook.allowLogout.load(ordering: .relaxed) {
+        if SPTAuthSessionHook.allowLogout {
             orig.invalidate()
         }
     }
 }
 
 // MARK: - OauthAccessTokenBridge — Extend token expiry
+// This private class inside Connectivity_SessionImpl controls the OAuth token's
+// expiry time. By hooking expiresAt to return a far-future date, we prevent
+// the internal timer from marking the token as expired.
+
 class OauthAccessTokenBridgeHook: ClassHook<NSObject> {
     typealias Group = SessionLogoutHookGroup
     static let targetName = "_TtC24Connectivity_SessionImplP33_831B98CC28223E431E21CD27ADD20AF222OauthAccessTokenBridge"
-
-    private var expiryTimer: DispatchSourceTimer?
-
     func expiresAt() -> Any {
         return Date(timeIntervalSinceNow: 365 * 24 * 60 * 60)
     }
@@ -174,46 +151,30 @@ class OauthAccessTokenBridgeHook: ClassHook<NSObject> {
 
     // orion:new
     func startExpiryExtender() {
-        let queue = DispatchQueue.global(qos: .utility)
-        let timer = DispatchSource.makeTimerSource(queue: queue)
-        timer.schedule(deadline: .now() + 60, repeating: 60)
-        timer.setEventHandler { [weak self] in
-            guard let self = self else {
-                timer.cancel()
-                return
-            }
-            let cls: AnyClass = type(of: self.target)
-            if let ivar = class_getInstanceVariable(cls, "expiresAt") {
-                let farFuture = Date(timeIntervalSinceNow: 365 * 24 * 60 * 60)
-                object_setIvar(self.target, ivar, farFuture)
-            } else {
-                timer.cancel()
+        DispatchQueue.global(qos: .utility).async { [weak target] in
+            while true {
+                Thread.sleep(forTimeInterval: 60)
+                guard let obj = target else { break }
+                let cls: AnyClass = type(of: obj)
+                if let ivar = class_getInstanceVariable(cls, "expiresAt") {
+                    let farFuture = Date(timeIntervalSinceNow: 365 * 24 * 60 * 60)
+                    object_setIvar(obj, ivar, farFuture)
+                }
             }
         }
-        timer.resume()
-        expiryTimer = timer
-    }
-
-    deinit {
-        expiryTimer?.cancel()
     }
 }
 
 // MARK: - Ably WebSocket Transport Hooks
+// Intercepts Ably real-time messages to block server-side logout/revocation events
 
+// Blocked Ably protocol actions: 5=disconnect, 6=disconnected, 7=close, 8=closed, 9=error, 12=detach, 13=detached, 17=auth
 private let blockedAblyActions: Set<Int> = [5, 6, 7, 8, 9, 12, 13, 17]
-
-private func extractAblyAction(from text: String) -> Int? {
-    guard let data = text.data(using: .utf8) else { return nil }
-    do {
-        if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-           let action = json["action"] as? Int {
-            return action
-        }
-    } catch {
-        // ignore
-    }
-    return nil
+private func extractAblyAction(_ text: String) -> Int? {
+    guard let range = text.range(of: "\"action\":") else { return nil }
+    let afterAction = text[range.upperBound...]
+    let digits = afterAction.prefix(while: { $0.isNumber })
+    return Int(digits)
 }
 
 class ARTWebSocketTransportHook: ClassHook<NSObject> {
@@ -222,7 +183,7 @@ class ARTWebSocketTransportHook: ClassHook<NSObject> {
 
     func webSocket(_ ws: AnyObject, didReceiveMessage message: AnyObject) {
         if let msgString = message as? String,
-           let action = extractAblyAction(from: msgString),
+           let action = extractAblyAction(msgString),
            blockedAblyActions.contains(action) {
             return
         }
@@ -234,6 +195,7 @@ class ARTWebSocketTransportHook: ClassHook<NSObject> {
     }
 }
 
+// MARK: - Ably SRWebSocket Frame Hook
 class ARTSRWebSocketHook: ClassHook<NSObject> {
     typealias Group = SessionLogoutHookGroup
     static let targetName = "ARTSRWebSocket"
@@ -241,7 +203,7 @@ class ARTSRWebSocketHook: ClassHook<NSObject> {
     func _handleFrameWithData(_ data: NSData, opCode code: Int) {
         if code == 1,
            let text = String(data: data as Data, encoding: .utf8),
-           let action = extractAblyAction(from: text),
+           let action = extractAblyAction(text),
            blockedAblyActions.contains(action) {
             return
         }
@@ -249,7 +211,7 @@ class ARTSRWebSocketHook: ClassHook<NSObject> {
     }
 }
 
-// MARK: - Global URLSessionTask hook
+// MARK: - Global URLSessionTask hook to catch auth traffic bypassing SPTDataLoaderService
 
 class URLSessionTaskResumeHook: ClassHook<NSObject> {
     typealias Group = SessionLogoutHookGroup
@@ -263,16 +225,28 @@ class URLSessionTaskResumeHook: ClassHook<NSObject> {
             let elapsed = Date().timeIntervalSince(tweakInitTime)
             let path = url.path
 
+            // Block outgoing DeleteToken/signup requests at network level
+            // Only block after initial startup (30s) to allow fresh login/signup
             if host.contains("spotify") || host.contains("spclient") {
-                if elapsed > 30 {
-                    if path.contains("DeleteToken") ||
-                       path.contains("signup/public") ||
-                       path.contains("pses/screenconfig") ||
-                       path.contains("bootstrap/v1/bootstrap") ||
-                       host.contains("apresolve") {
-                        task.cancel()
-                        return
-                    }
+                if elapsed > 30 && path.contains("DeleteToken") {
+                    task.cancel()
+                    return
+                }
+                if elapsed > 30 && path.contains("signup/public") {
+                    task.cancel()
+                    return
+                }
+                if elapsed > 30 && path.contains("pses/screenconfig") {
+                    task.cancel()
+                    return
+                }
+                if elapsed > 30 && path.contains("bootstrap/v1/bootstrap") {
+                    task.cancel()
+                    return
+                }
+                if elapsed > 30 && host.contains("apresolve") {
+                    task.cancel()
+                    return
                 }
             }
         }
