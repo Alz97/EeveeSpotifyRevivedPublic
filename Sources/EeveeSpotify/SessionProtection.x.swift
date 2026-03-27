@@ -1,5 +1,6 @@
 import Orion
 import Foundation
+import os
 
 // MARK: - Session Logout Protection
 // Hooks all logout-related methods to prevent Spotify from logging out
@@ -16,8 +17,22 @@ class SPTAuthSessionHook: ClassHook<NSObject> {
     typealias Group = SessionLogoutHookGroup
     static let targetName = "SPTAuthSessionImplementation"
 
-    // orion:new
-    static var allowLogout = false
+    // Thread-safe storage for allowLogout
+    private static var _allowLogout = false
+    private static var allowLogoutLock = os_unfair_lock_s()
+    
+    static var allowLogout: Bool {
+        get {
+            os_unfair_lock_lock(&allowLogoutLock)
+            defer { os_unfair_lock_unlock(&allowLogoutLock) }
+            return _allowLogout
+        }
+        set {
+            os_unfair_lock_lock(&allowLogoutLock)
+            defer { os_unfair_lock_unlock(&allowLogoutLock) }
+            _allowLogout = newValue
+        }
+    }
 
     func logout() {
         if SPTAuthSessionHook.allowLogout {
