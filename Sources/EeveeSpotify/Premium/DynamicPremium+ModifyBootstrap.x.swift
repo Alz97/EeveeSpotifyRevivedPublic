@@ -61,7 +61,7 @@ class SpotifySessionDelegateBootstrapHook: ClassHook<NSObject>, SpotifySessionDe
             
             if UserDefaults.patchType == .requests {
                 modifyRemoteConfiguration(&bootstrapMessage.ucsResponse)
-                let modifiedData = try bootstrapMessage.serializedBytes()
+                let modifiedData = try bootstrapMessage.serializedData()   // ← corretto
                 orig.URLSession(session, dataTask: task, didReceiveData: modifiedData)
             } else {
                 orig.URLSession(session, dataTask: task, didReceiveData: buffer)
@@ -69,6 +69,7 @@ class SpotifySessionDelegateBootstrapHook: ClassHook<NSObject>, SpotifySessionDe
             
             orig.URLSession(session, task: task, didCompleteWithError: nil)
         } catch {
+            // In caso di errore, passa l'errore originale a Spotify
             orig.URLSession(session, task: task, didCompleteWithError: error)
         }
     }
