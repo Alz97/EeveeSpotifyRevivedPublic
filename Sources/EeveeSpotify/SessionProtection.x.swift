@@ -1,7 +1,6 @@
 import Orion
 import Foundation
-import os.atomics   // Per ManagedAtomic
-import Darwin       // Per NSLog (opzionale)
+import os.atomics
 
 // MARK: - Session Logout Protection
 // Hooks all logout-related methods to prevent Spotify from logging out
@@ -18,7 +17,6 @@ class SPTAuthSessionHook: ClassHook<NSObject> {
     typealias Group = SessionLogoutHookGroup
     static let targetName = "SPTAuthSessionImplementation"
 
-    // Atomic flag per thread‑safe access
     static let allowLogout = ManagedAtomic<Bool>(false)
 
     func logout() {
@@ -66,20 +64,17 @@ class SessionServiceImplHook: ClassHook<NSObject> {
     typealias Group = SessionLogoutHookGroup
     static let targetName = "_TtC24Connectivity_SessionImpl18SessionServiceImpl"
 
-    // WorkItem per gestire il reset del flag di logout
     private static var resetWorkItem: DispatchWorkItem?
 
     func automatedLogoutThenLogin() {
-        // Blocca completamente il logout automatico
+        // Block automated logout
     }
 
     func userInitiatedLogout() {
         if Thread.isMainThread {
-            // Annulla eventuale reset precedente
             SessionServiceImplHook.resetWorkItem?.cancel()
             SPTAuthSessionHook.allowLogout.store(true, ordering: .relaxed)
 
-            // Crea un nuovo work item per resettare il flag dopo 5 secondi
             let workItem = DispatchWorkItem {
                 SPTAuthSessionHook.allowLogout.store(false, ordering: .relaxed)
                 SessionServiceImplHook.resetWorkItem = nil
@@ -130,9 +125,6 @@ class LegacyLoginControllerHook: ClassHook<NSObject> {
 }
 
 // MARK: - OauthAccessTokenBridge — Extend token expiry
-// This private class inside Connectivity_SessionImpl controls the OAuth token's
-// expiry time. By hooking expiresAt to return a far-future date, we prevent
-// the internal timer from marking the token as expired.
 
 class OauthAccessTokenBridgeHook: ClassHook<NSObject> {
     typealias Group = SessionLogoutHookGroup
@@ -159,17 +151,14 @@ class OauthAccessTokenBridgeHook: ClassHook<NSObject> {
     // orion:new
     func extendExpiryIvar() {
         let bridgeClass: AnyClass = type(of: target)
-        guard let ivar = class_getInstanceVariable(bridgeClass, "expiresAt") else {
-            NSLog("[SpotifyTweak] OauthAccessTokenBridge: ivar 'expiresAt' not found")
-            return
+        if let ivar = class_getInstanceVariable(bridgeClass, "expiresAt") {
+            let farFuture = Date(timeIntervalSinceNow: 365 * 24 * 60 * 60)
+            object_setIvar(target, ivar, farFuture)
         }
-        let farFuture = Date(timeIntervalSinceNow: 365 * 24 * 60 * 60)
-        object_setIvar(target, ivar, farFuture)
     }
 
     // orion:new
     func startExpiryExtender() {
-        // Crea un timer su una coda seriale di utilità
         let queue = DispatchQueue.global(qos: .utility)
         let timer = DispatchSource.makeTimerSource(queue: queue)
         timer.schedule(deadline: .now() + 60, repeating: 60)
@@ -183,7 +172,6 @@ class OauthAccessTokenBridgeHook: ClassHook<NSObject> {
                 let farFuture = Date(timeIntervalSinceNow: 365 * 24 * 60 * 60)
                 object_setIvar(self.target, ivar, farFuture)
             } else {
-                NSLog("[SpotifyTweak] OauthAccessTokenBridge: ivar 'expiresAt' lost, stopping timer")
                 timer.cancel()
             }
         }
@@ -197,12 +185,9 @@ class OauthAccessTokenBridgeHook: ClassHook<NSObject> {
 }
 
 // MARK: - Ably WebSocket Transport Hooks
-// Intercepts Ably real-time messages to block server-side logout/revocation events
 
-// Blocked Ably protocol actions: 5=disconnect, 6=disconnected, 7=close, 8=closed, 9=error, 12=detach, 13=detached, 17=auth
 private let blockedAblyActions: Set<Int> = [5, 6, 7, 8, 9, 12, 13, 17]
 
-// Funzione robusta per estrarre l'action da un messaggio JSON
 private func extractAblyAction(from text: String) -> Int? {
     guard let data = text.data(using: .utf8) else { return nil }
     do {
@@ -211,7 +196,7 @@ private func extractAblyAction(from text: String) -> Int? {
             return action
         }
     } catch {
-        // Se il parsing fallisce, ignora il messaggio (meglio che crashare)
+        // ignore
     }
     return nil
 }
@@ -234,13 +219,12 @@ class ARTWebSocketTransportHook: ClassHook<NSObject> {
     }
 }
 
-// MARK: - Ably SRWebSocket Frame Hook
 class ARTSRWebSocketHook: ClassHook<NSObject> {
     typealias Group = SessionLogoutHookGroup
     static let targetName = "ARTSRWebSocket"
 
     func _handleFrameWithData(_ data: NSData, opCode code: Int) {
-        if code == 1,  // Text frame
+        if code == 1,
            let text = String(data: data as Data, encoding: .utf8),
            let action = extractAblyAction(from: text),
            blockedAblyActions.contains(action) {
@@ -250,7 +234,7 @@ class ARTSRWebSocketHook: ClassHook<NSObject> {
     }
 }
 
-// MARK: - Global URLSessionTask hook to catch auth traffic bypassing SPTDataLoaderService
+// MARK: - Global URLSessionTask hook
 
 class URLSessionTaskResumeHook: ClassHook<NSObject> {
     typealias Group = SessionLogoutHookGroup
@@ -261,11 +245,9 @@ class URLSessionTaskResumeHook: ClassHook<NSObject> {
            let url = task.currentRequest?.url ?? task.originalRequest?.url,
            let host = url.host?.lowercased() {
 
-            // tInitTime deve essere definita globalmente (ad esempio all'inizializzazione del tweak)
             let elapsed = Date().timeIntervalSince(tweakInitTime)
             let path = url.path
 
-            // Blocca le richieste a endpoint sospetti solo dopo la fase di startup (30 secondi)
             if host.contains("spotify") || host.contains("spclient") {
                 if elapsed > 30 {
                     if path.contains("DeleteToken") ||
