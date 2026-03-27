@@ -1,8 +1,30 @@
 import Foundation
 import Orion
+import os
 
-// Global variable for access token
-public var spotifyAccessToken: String?
+// MARK: - Token storage (thread-safe)
+private struct TokenStorage {
+    private static var _value: String?
+    private static var lock = os_unfair_lock_s()
+    
+    static var value: String? {
+        get {
+            os_unfair_lock_lock(&lock)
+            defer { os_unfair_lock_unlock(&lock) }
+            return _value
+        }
+        set {
+            os_unfair_lock_lock(&lock)
+            defer { os_unfair_lock_unlock(&lock) }
+            _value = newValue
+        }
+    }
+}
+
+public var spotifyAccessToken: String? {
+    get { TokenStorage.value }
+    set { TokenStorage.value = newValue }
+}
 
 class SPTDataLoaderServiceHook: ClassHook<NSObject>, SpotifySessionDelegate {
     static let targetName = "SPTDataLoaderService"
@@ -26,7 +48,7 @@ class SPTDataLoaderServiceHook: ClassHook<NSObject>, SpotifySessionDelegate {
         let shouldReplaceLyrics = BaseLyricsGroup.isActive
 
         return (shouldReplaceLyrics && url.isLyrics)
-            || (shouldPatchPremium && (url.isCustomize || url.isPremiumPlanRow || url.isPremiumBadge || url.isPlanOverview ))
+            || (shouldPatchPremium && (url.isCustomize || url.isPremiumPlanRow || url.isPremiumBadge || url.isPlanOverview))
     }
 
     // orion:new
