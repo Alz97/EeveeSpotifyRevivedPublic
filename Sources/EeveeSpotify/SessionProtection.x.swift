@@ -2,7 +2,10 @@ import Foundation
 import Orion
 import os
 
-// MARK: - Sostituto di ManagedAtomic<Bool> (thread-safe, non mutante)
+enum AtomicOrdering {
+    case relaxed
+}
+
 final class AtomicBool {
     private var value: Bool
     private var lock = os_unfair_lock_s()
@@ -11,13 +14,13 @@ final class AtomicBool {
         self.value = initialValue
     }
     
-    func load(ordering: Any) -> Bool {
+    func load(ordering: AtomicOrdering) -> Bool {
         os_unfair_lock_lock(&lock)
         defer { os_unfair_lock_unlock(&lock) }
         return value
     }
     
-    func store(_ newValue: Bool, ordering: Any) {
+    func store(_ newValue: Bool, ordering: AtomicOrdering) {
         os_unfair_lock_lock(&lock)
         value = newValue
         os_unfair_lock_unlock(&lock)
