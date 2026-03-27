@@ -1,24 +1,40 @@
-import Orion
 import Foundation
+import Orion
 import os
-import Atomics
 
-// MARK: - Session Logout Protection
-// Hooks all logout-related methods to prevent Spotify from logging out
-// when it detects the account isn't actually premium.
-// Also intercepts Ably WebSocket messages to block server-side revocation events.
-// Additionally blocks network endpoints that trigger session invalidation.
-// Extends OAuth token expiry to prevent internal reauth triggers.
+// MARK: - Thread‑safe Bool wrapper (sostituisce ManagedAtomic)
 
-struct SessionLogoutHookGroup: HookGroup { }
+struct AtomicBool {
+    private var value: Bool
+    private var lock = os_unfair_lock_s()
+    
+    init(_ initialValue: Bool) {
+        self.value = initialValue
+    }
+    
+    /// Carica il valore. Il parametro `ordering` viene ignorato.
+    func load(ordering: Any) -> Bool {
+        os_unfair_lock_lock(&lock)
+        defer { os_unfair_lock_unlock(&lock) }
+        return value
+    }
+    
+    /// Memorizza un nuovo valore. Il parametro `ordering` viene ignorato.
+    mutating func store(_ newValue: Bool, ordering: Any) {
+        os_unfair_lock_lock(&lock)
+        value = newValue
+        os_unfair_lock_unlock(&lock)
+    }
+}
 
-// MARK: - SPTAuthSessionImplementation — Core Session Hooks
+// MARK: - SPTAuthSessionHook
 
 class SPTAuthSessionHook: ClassHook<NSObject> {
     typealias Group = SessionLogoutHookGroup
     static let targetName = "SPTAuthSessionImplementation"
 
-    static let allowLogout = ManagedAtomic<Bool>(false)
+    // Era: static let allowLogout = ManagedAtomic<Bool>(false)
+    static var allowLogout = AtomicBool(false)      // ora è var perché store è mutating
 
     func logout() {
         if SPTAuthSessionHook.allowLogout.load(ordering: .relaxed) {
