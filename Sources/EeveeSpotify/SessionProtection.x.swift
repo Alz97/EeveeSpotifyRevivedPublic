@@ -1,6 +1,6 @@
 import Orion
 import Foundation
-import os.atomics
+import os
 
 // MARK: - Session Logout Protection
 // Hooks all logout-related methods to prevent Spotify from logging out
