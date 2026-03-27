@@ -1,6 +1,11 @@
 import Foundation
 
 extension URL {
+
+    var isSignup:Bool {
+        self.path.contains("/signup/public/v1/account")
+    }
+    
     var isLyrics: Bool {
         self.path.contains("color-lyrics/v2")
     }
