@@ -2,15 +2,8 @@ import Foundation
 import Orion
 import os
 
-// MARK: - Hook Group per la protezione logout
-class SessionLogoutHookGroup: HookGroup { }
-
-// MARK: - Thread‑safe Bool wrapper (sostituisce ManagedAtomic)
-enum AtomicOrdering {
-    case relaxed
-}
-
-struct AtomicBool {
+// MARK: - Sostituto di ManagedAtomic<Bool> (thread-safe, non mutante)
+final class AtomicBool {
     private var value: Bool
     private var lock = os_unfair_lock_s()
     
@@ -18,27 +11,28 @@ struct AtomicBool {
         self.value = initialValue
     }
     
-    // Il parametro ordering è presente per compatibilità con le chiamate originali
-    mutating func load(ordering: AtomicOrdering) -> Bool {
+    func load(ordering: Any) -> Bool {
         os_unfair_lock_lock(&lock)
         defer { os_unfair_lock_unlock(&lock) }
         return value
     }
     
-    mutating func store(_ newValue: Bool, ordering: AtomicOrdering) {
+    func store(_ newValue: Bool, ordering: Any) {
         os_unfair_lock_lock(&lock)
         value = newValue
         os_unfair_lock_unlock(&lock)
     }
 }
 
+// MARK: - SessionLogoutHookGroup (definita solo se non esiste già)
+class SessionLogoutHookGroup: HookGroup { }
+
 // MARK: - SPTAuthSessionHook
 class SPTAuthSessionHook: ClassHook<NSObject> {
     typealias Group = SessionLogoutHookGroup
     static let targetName = "SPTAuthSessionImplementation"
 
-    static var allowLogout = AtomicBool(false)
-    static var group = SessionLogoutHookGroup()   // Aggiunto per conformità al protocollo
+    static let allowLogout = AtomicBool(false)   // ora è una classe, quindi let va bene
 
     func logout() {
         if SPTAuthSessionHook.allowLogout.load(ordering: .relaxed) {
@@ -83,7 +77,6 @@ class SPTAuthSessionHook: ClassHook<NSObject> {
 class SessionServiceImplHook: ClassHook<NSObject> {
     typealias Group = SessionLogoutHookGroup
     static let targetName = "_TtC24Connectivity_SessionImpl18SessionServiceImpl"
-    static var group = SessionLogoutHookGroup()
 
     private static var resetWorkItem: DispatchWorkItem?
 
@@ -118,7 +111,6 @@ class SessionServiceImplHook: ClassHook<NSObject> {
 class LegacyLoginControllerHook: ClassHook<NSObject> {
     typealias Group = SessionLogoutHookGroup
     static let targetName = "SPTAuthLegacyLoginControllerImplementation"
-    static var group = SessionLogoutHookGroup()
 
     func sessionDidLogout(_ session: AnyObject, withReason reason: AnyObject) {
         if SPTAuthSessionHook.allowLogout.load(ordering: .relaxed) {
@@ -149,7 +141,6 @@ class LegacyLoginControllerHook: ClassHook<NSObject> {
 class OauthAccessTokenBridgeHook: ClassHook<NSObject> {
     typealias Group = SessionLogoutHookGroup
     static let targetName = "_TtC24Connectivity_SessionImplP33_831B98CC28223E431E21CD27ADD20AF222OauthAccessTokenBridge"
-    static var group = SessionLogoutHookGroup()
 
     private var expiryTimer: DispatchSourceTimer?
 
