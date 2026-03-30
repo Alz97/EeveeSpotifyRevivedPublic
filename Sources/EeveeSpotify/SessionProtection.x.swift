@@ -241,32 +241,37 @@ class URLSessionTaskResumeHook: ClassHook<NSObject> {
     func resume() {
         guard let task = target as? URLSessionTask,
               let url = task.currentRequest?.url ?? task.originalRequest?.url,
-              let host = url.host?.lowercased() else {
+              let host = url.host else {
             orig.resume()
             return
         }
 
-        let path = url.path.lowercased()
-        let absolute = url.absoluteString.lowercased()
+        let elapsed = Date().timeIntervalSince(tweakInitTime)
+        let path = url.path
+        let absolute = url.absoluteString
 
-        // Blocca qualsiasi richiesta che contenga parole chiave di logout
-        let logoutKeywords = ["logout", "revoke", "delete", "signout", "terminate", "invalidate", "destroy"]
-        for keyword in logoutKeywords {
-            if path.contains(keyword) || absolute.contains(keyword) {
-                task.cancel()
-                return
+        // Blocca qualsiasi richiesta che contenga parole chiave di logout (solo dopo 30s)
+        if elapsed > 30 {
+            let logoutKeywords = ["logout", "revoke", "delete", "signout", "terminate", "invalidate", "destroy"]
+            for keyword in logoutKeywords {
+                if path.contains(keyword) || absolute.contains(keyword) {
+                    task.cancel()
+                    return
+                }
             }
         }
 
-        // Blocca endpoint critici noti
-        if host.contains("spotify") || host.contains("spclient") || host.contains("ably") {
-            if path.contains("deletetoken") ||
-               path.contains("signup/public") ||
-               path.contains("pses/screenconfig") ||
-               path.contains("bootstrap/v1/bootstrap") ||
-               host.contains("apresolve") {
-                task.cancel()
-                return
+        // Blocca endpoint critici noti (solo dopo 30s)
+        if elapsed > 30 {
+            if host.contains("spotify") || host.contains("spclient") || host.contains("ably") {
+                if path.contains("DeleteToken") ||
+                   path.contains("signup/public") ||
+                   path.contains("pses/screenconfig") ||
+                   path.contains("bootstrap/v1/bootstrap") ||
+                   host.contains("apresolve") {
+                    task.cancel()
+                    return
+                }
             }
         }
 
