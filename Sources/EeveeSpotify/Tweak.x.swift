@@ -2,6 +2,19 @@ import Orion
 import EeveeSpotifyC
 import UIKit
 
+// Timestamp of tweak initialization — persists across Orion reinits within the same process
+// using an environment variable. This prevents the 30s auth window from resetting
+// when the C++ timer triggers a session reinit cycle.
+let tweakInitTime: Date = {
+    if let existing = getenv("EEVEE_BOOT_TIME"),
+       let interval = Double(String(cString: existing)) {
+        return Date(timeIntervalSince1970: interval)
+    }
+    let now = Date()
+    setenv("EEVEE_BOOT_TIME", "\(now.timeIntervalSince1970)", 1)
+    return now
+}()
+
 func exitApplication() {
     UIControl().sendAction(#selector(URLSessionTask.suspend), to: UIApplication.shared, for: nil)
     Timer.scheduledTimer(withTimeInterval: 0.2, repeats: false) { _ in
