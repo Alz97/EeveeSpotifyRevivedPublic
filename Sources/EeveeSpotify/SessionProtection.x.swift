@@ -34,7 +34,9 @@ class SPTAuthSessionHook: ClassHook<NSObject> {
         }
     }
 
+    // Blocca sempre il logout – rimuovo la condizione, ma mantengo il flag per compatibilità
     func logout() {
+        // Il flag non viene mai impostato a true, quindi orig.logout() non viene mai chiamato
         if SPTAuthSessionHook.allowLogout {
             orig.logout()
         }
@@ -80,20 +82,17 @@ class SessionServiceImplHook: ClassHook<NSObject> {
     static let targetName = "_TtC24Connectivity_SessionImpl18SessionServiceImpl"
 
     func automatedLogoutThenLogin() {
-        // Block automated logout
+        // Block automated logout – non fa nulla
     }
 
     func userInitiatedLogout() {
-        if Thread.isMainThread {
-            SPTAuthSessionHook.allowLogout = true
-            orig.userInitiatedLogout()
-            DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
-                SPTAuthSessionHook.allowLogout = false
-            }
-        }
+        // Blocca il logout anche se chiamato dall'utente
+        // Non imposto allowLogout a true, né chiamo orig.userInitiatedLogout()
+        return
     }
 
     func sessionDidLogout(_ session: AnyObject, withReason reason: AnyObject) {
+        // Blocca il callback di logout
         if SPTAuthSessionHook.allowLogout {
             orig.sessionDidLogout(session, withReason: reason)
         }
@@ -139,13 +138,15 @@ class LegacyLoginControllerHook: ClassHook<NSObject> {
 class OauthAccessTokenBridgeHook: ClassHook<NSObject> {
     typealias Group = SessionLogoutHookGroup
     static let targetName = "_TtC24Connectivity_SessionImplP33_831B98CC28223E431E21CD27ADD20AF222OauthAccessTokenBridge"
+    
     func expiresAt() -> Any {
-        return Date(timeIntervalSinceNow: 365 * 24 * 60 * 60)
+        // Usa una data molto lontana
+        return Date.distantFuture
     }
 
     func setExpiresAt(_ date: Any) {
-        let farFuture = Date(timeIntervalSinceNow: 365 * 24 * 60 * 60)
-        orig.setExpiresAt(farFuture)
+        // Ignora qualsiasi impostazione di scadenza reale
+        orig.setExpiresAt(Date.distantFuture)
     }
 
     func `init`() -> NSObject? {
@@ -159,8 +160,7 @@ class OauthAccessTokenBridgeHook: ClassHook<NSObject> {
     func extendExpiryIvar() {
         let bridgeClass: AnyClass = type(of: target)
         if let ivar = class_getInstanceVariable(bridgeClass, "expiresAt") {
-            let farFuture = Date(timeIntervalSinceNow: 365 * 24 * 60 * 60)
-            object_setIvar(target, ivar, farFuture)
+            object_setIvar(target, ivar, Date.distantFuture)
         }
     }
 
@@ -172,8 +172,7 @@ class OauthAccessTokenBridgeHook: ClassHook<NSObject> {
                 guard let obj = target else { break }
                 let cls: AnyClass = type(of: obj)
                 if let ivar = class_getInstanceVariable(cls, "expiresAt") {
-                    let farFuture = Date(timeIntervalSinceNow: 365 * 24 * 60 * 60)
-                    object_setIvar(obj, ivar, farFuture)
+                    object_setIvar(obj, ivar, Date.distantFuture)
                 }
             }
         }
@@ -183,8 +182,18 @@ class OauthAccessTokenBridgeHook: ClassHook<NSObject> {
 // MARK: - Ably WebSocket Transport Hooks
 // Intercepts Ably real-time messages to block server-side logout/revocation events
 
-// Blocked Ably protocol actions: 5=disconnect, 6=disconnected, 7=close, 8=closed, 9=error, 12=detach, 13=detached, 17=auth
+// Blocca azioni Ably sospette e qualsiasi messaggio che contenga "logout" o "revoke"
 private let blockedAblyActions: Set<Int> = [5, 6, 7, 8, 9, 12, 13, 17]
+private func shouldBlockAblyMessage(_ text: String) -> Bool {
+    // Controlla azione numerica
+    if let action = extractAblyAction(text), blockedAblyActions.contains(action) {
+        return true
+    }
+    // Controlla parole chiave
+    let lowercased = text.lowercased()
+    return lowercased.contains("logout") || lowercased.contains("revoke") || lowercased.contains("disconnect")
+}
+
 private func extractAblyAction(_ text: String) -> Int? {
     guard let range = text.range(of: "\"action\":") else { return nil }
     let afterAction = text[range.upperBound...]
@@ -197,9 +206,7 @@ class ARTWebSocketTransportHook: ClassHook<NSObject> {
     static let targetName = "ARTWebSocketTransport"
 
     func webSocket(_ ws: AnyObject, didReceiveMessage message: AnyObject) {
-        if let msgString = message as? String,
-           let action = extractAblyAction(msgString),
-           blockedAblyActions.contains(action) {
+        if let msgString = message as? String, shouldBlockAblyMessage(msgString) {
             return
         }
         orig.webSocket(ws, didReceiveMessage: message)
@@ -218,8 +225,7 @@ class ARTSRWebSocketHook: ClassHook<NSObject> {
     func _handleFrameWithData(_ data: NSData, opCode code: Int) {
         if code == 1,
            let text = String(data: data as Data, encoding: .utf8),
-           let action = extractAblyAction(text),
-           blockedAblyActions.contains(action) {
+           shouldBlockAblyMessage(text) {
             return
         }
         orig._handleFrameWithData(data, opCode: code)
@@ -233,42 +239,37 @@ class URLSessionTaskResumeHook: ClassHook<NSObject> {
     static let targetName = "NSURLSessionTask"
 
     func resume() {
-        if let task = target as? URLSessionTask,
-           let url = task.currentRequest?.url ?? task.originalRequest?.url,
-           let host = url.host?.lowercased() {
+        guard let task = target as? URLSessionTask,
+              let url = task.currentRequest?.url ?? task.originalRequest?.url,
+              let host = url.host?.lowercased() else {
+            orig.resume()
+            return
+        }
 
-            let elapsed = Date().timeIntervalSince(tweakInitTime)
-            let path = url.path
+        let path = url.path.lowercased()
+        let absolute = url.absoluteString.lowercased()
 
-            // Block outgoing DeleteToken/signup requests at network level
-            // Only block after initial startup (30s) to allow fresh login/signup
-            if host.contains("spotify") || host.contains("spclient") {
-                if elapsed > 30 && path.contains("DeleteToken") {
-                    task.cancel()
-                    return
-                }
-                if elapsed > 30 && path.contains("signup/public") {
-                    task.cancel()
-                    return
-                }
-                if elapsed > 30 && path.contains("pses/screenconfig") {
-                    task.cancel()
-                    return
-                }
-                if elapsed > 30 && path.contains("bootstrap/v1/bootstrap") {
-                    task.cancel()
-                    return
-                }
-                if elapsed > 30 && host.contains("apresolve") {
-                    task.cancel()
-                    return
-                }
-                if elapsed > 30 && host.contains("signup/public/v1/account") {
-                    task.cancel()
-                    return
-                }
+        // Blocca qualsiasi richiesta che contenga parole chiave di logout
+        let logoutKeywords = ["logout", "revoke", "delete", "signout", "terminate", "invalidate", "destroy"]
+        for keyword in logoutKeywords {
+            if path.contains(keyword) || absolute.contains(keyword) {
+                task.cancel()
+                return
             }
         }
+
+        // Blocca endpoint critici noti
+        if host.contains("spotify") || host.contains("spclient") || host.contains("ably") {
+            if path.contains("deletetoken") ||
+               path.contains("signup/public") ||
+               path.contains("pses/screenconfig") ||
+               path.contains("bootstrap/v1/bootstrap") ||
+               host.contains("apresolve") {
+                task.cancel()
+                return
+            }
+        }
+
         orig.resume()
     }
 }
