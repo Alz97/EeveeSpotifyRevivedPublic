@@ -271,6 +271,8 @@ class URLSessionTaskResumeHook: ClassHook<NSObject> {
                    path.contains("/signup/public/v1/account") ||
                    path.contains("account?") ||
                    path.contains("sdk-exp") ||
+                   path.contains("reachability/check") ||
+                   path.contains("customize") ||
                    host.contains("apresolve") {
                     task.cancel()
                     return
