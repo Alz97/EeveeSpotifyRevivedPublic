@@ -246,6 +246,7 @@ class URLSessionTaskResumeHook: ClassHook<NSObject> {
             return
         }
 
+        let elapsed = Date().timeIntervalSince(tweakInitTime)
         let path = url.path
         let absolute = url.absoluteString
 
