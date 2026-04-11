@@ -2,9 +2,6 @@ import Foundation
 import Orion
 import os
 
-// MARK: - Global initialization time
-let tweakInitTime = Date()
-
 // MARK: - Token storage (thread-safe)
 private struct TokenStorage {
     private static var _value: String?
@@ -27,10 +24,6 @@ private struct TokenStorage {
 public var spotifyAccessToken: String? {
     get { TokenStorage.value }
     set { TokenStorage.value = newValue }
-}
-
-// Helper function for compatibility (original had it)
-func DataLoaderServiceHooks_startCapturing() {
 }
 
 class SPTDataLoaderServiceHook: ClassHook<NSObject>, SpotifySessionDelegate {
