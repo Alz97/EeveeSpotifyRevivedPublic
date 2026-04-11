@@ -34,9 +34,7 @@ class SPTAuthSessionHook: ClassHook<NSObject> {
         }
     }
 
-    // Blocca sempre il logout – rimuovo la condizione, ma mantengo il flag per compatibilità
     func logout() {
-        // Il flag non viene mai impostato a true, quindi orig.logout() non viene mai chiamato
         if SPTAuthSessionHook.allowLogout {
             orig.logout()
         }
@@ -82,17 +80,22 @@ class SessionServiceImplHook: ClassHook<NSObject> {
     static let targetName = "_TtC24Connectivity_SessionImpl18SessionServiceImpl"
 
     func automatedLogoutThenLogin() {
-        // Block automated logout – non fa nulla
+        // Block automated logout
     }
 
     func userInitiatedLogout() {
-        // Blocca il logout anche se chiamato dall'utente
-        // Non imposto allowLogout a true, né chiamo orig.userInitiatedLogout()
-        return
+        // Permette il logout solo se chiamato esplicitamente dall'utente sul main thread
+        if Thread.isMainThread {
+            SPTAuthSessionHook.allowLogout = true
+            orig.userInitiatedLogout()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
+                SPTAuthSessionHook.allowLogout = false
+            }
+        }
+        // else: blocca logout automatici da background thread
     }
 
     func sessionDidLogout(_ session: AnyObject, withReason reason: AnyObject) {
-        // Blocca il callback di logout
         if SPTAuthSessionHook.allowLogout {
             orig.sessionDidLogout(session, withReason: reason)
         }
@@ -131,21 +134,16 @@ class LegacyLoginControllerHook: ClassHook<NSObject> {
 }
 
 // MARK: - OauthAccessTokenBridge — Extend token expiry
-// This private class inside Connectivity_SessionImpl controls the OAuth token's
-// expiry time. By hooking expiresAt to return a far-future date, we prevent
-// the internal timer from marking the token as expired.
 
 class OauthAccessTokenBridgeHook: ClassHook<NSObject> {
     typealias Group = SessionLogoutHookGroup
     static let targetName = "_TtC24Connectivity_SessionImplP33_831B98CC28223E431E21CD27ADD20AF222OauthAccessTokenBridge"
     
     func expiresAt() -> Any {
-        // Usa una data molto lontana
         return Date.distantFuture
     }
 
     func setExpiresAt(_ date: Any) {
-        // Ignora qualsiasi impostazione di scadenza reale
         orig.setExpiresAt(Date.distantFuture)
     }
 
@@ -180,25 +178,35 @@ class OauthAccessTokenBridgeHook: ClassHook<NSObject> {
 }
 
 // MARK: - Ably WebSocket Transport Hooks
-// Intercepts Ably real-time messages to block server-side logout/revocation events
 
-// Blocca azioni Ably sospette e qualsiasi messaggio che contenga "logout" o "revoke"
+// Blocca azioni Ably sospette e messaggi product-state-update
 private let blockedAblyActions: Set<Int> = [5, 6, 7, 8, 9, 12, 13, 17]
-private func shouldBlockAblyMessage(_ text: String) -> Bool {
-    // Controlla azione numerica
-    if let action = extractAblyAction(text), blockedAblyActions.contains(action) {
-        return true
-    }
-    // Controlla parole chiave
-    let lowercased = text.lowercased()
-    return lowercased.contains("logout") || lowercased.contains("revoke") || lowercased.contains("disconnect")
-}
 
 private func extractAblyAction(_ text: String) -> Int? {
     guard let range = text.range(of: "\"action\":") else { return nil }
     let afterAction = text[range.upperBound...]
     let digits = afterAction.prefix(while: { $0.isNumber })
     return Int(digits)
+}
+
+private func shouldBlockAblyMessage(_ text: String) -> Bool {
+    // 1. Controlla azione numerica bloccata
+    if let action = extractAblyAction(text), blockedAblyActions.contains(action) {
+        return true
+    }
+    
+    // 2. Blocca specifici messaggi product-state-update (action 15)
+    if let action = extractAblyAction(text), action == 15 {
+        if text.contains("product-state-update") ||
+           text.contains("product_state_update") ||
+           text.contains("productStateUpdate") {
+            return true
+        }
+    }
+    
+    // 3. Controlla parole chiave generiche di logout/revoca
+    let lowercased = text.lowercased()
+    return lowercased.contains("logout") || lowercased.contains("revoke") || lowercased.contains("disconnect")
 }
 
 class ARTWebSocketTransportHook: ClassHook<NSObject> {
@@ -218,6 +226,7 @@ class ARTWebSocketTransportHook: ClassHook<NSObject> {
 }
 
 // MARK: - Ably SRWebSocket Frame Hook
+
 class ARTSRWebSocketHook: ClassHook<NSObject> {
     typealias Group = SessionLogoutHookGroup
     static let targetName = "ARTSRWebSocket"
@@ -232,7 +241,7 @@ class ARTSRWebSocketHook: ClassHook<NSObject> {
     }
 }
 
-// MARK: - Global URLSessionTask hook to catch auth traffic bypassing SPTDataLoaderService
+// MARK: - Global URLSessionTask hook
 
 class URLSessionTaskResumeHook: ClassHook<NSObject> {
     typealias Group = SessionLogoutHookGroup
@@ -250,7 +259,7 @@ class URLSessionTaskResumeHook: ClassHook<NSObject> {
         let path = url.path
         let absolute = url.absoluteString
 
-        // Blocca qualsiasi richiesta che contenga parole chiave di logout (solo dopo 30s)
+        // Blocca richieste con parole chiave di logout (solo dopo 30s)
         if elapsed > 30 {
             let logoutKeywords = ["logout", "revoke", "delete", "signout", "terminate", "invalidate", "destroy"]
             for keyword in logoutKeywords {
