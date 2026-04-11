@@ -1,5 +1,13 @@
 import Orion
 
+private func showHavePremiumPopUp() {
+    PopUpHelper.showPopUp(
+        delayed: true,
+        message: "have_premium_popup".localized,
+        buttonText: "OK".uiKitLocalized
+    )
+}
+
 class SpotifySessionDelegateBootstrapHook: ClassHook<NSObject>, SpotifySessionDelegate {
     static var targetName: String {
         switch EeveeSpotify.hookTarget {
@@ -22,11 +30,19 @@ class SpotifySessionDelegateBootstrapHook: ClassHook<NSObject>, SpotifySessionDe
         dataTask task: URLSessionDataTask,
         didReceiveData data: Data
     ) {
-        guard let url = task.currentRequest?.url, url.isBootstrap else {
-            orig.URLSession(session, dataTask: task, didReceiveData: data)
+        guard 
+            let request = task.currentRequest,
+            let url = request.url
+        else {
             return
         }
-        URLSessionHelper.shared.setOrAppend(data, for: url)
+        
+        if url.isBootstrap {
+            URLSessionHelper.shared.setOrAppend(data, for: url)
+            return
+        }
+
+        orig.URLSession(session, dataTask: task, didReceiveData: data)
     }
     
     func URLSession(
@@ -35,50 +51,56 @@ class SpotifySessionDelegateBootstrapHook: ClassHook<NSObject>, SpotifySessionDe
         didCompleteWithError error: Error?
     ) {
         guard
-            let url = task.currentRequest?.url,
-            url.isBootstrap,
-            error == nil,
-            let buffer = URLSessionHelper.shared.obtainData(for: url)
+            let request = task.currentRequest,
+            let url = request.url
         else {
-            orig.URLSession(session, task: task, didCompleteWithError: error)
             return
         }
         
-        do {
-            var bootstrapMessage = try BootstrapMessage(serializedBytes: buffer)
+        if error == nil && url.isBootstrap {
+            guard let buffer = URLSessionHelper.shared.obtainData(for: url) else {
+                orig.URLSession(session, task: task, didCompleteWithError: error)
+                return
+            }
             
-            if UserDefaults.patchType == .notSet {
-                if bootstrapMessage.attributes["type"]?.stringValue == "premium" {
-                    UserDefaults.patchType = .disabled
-                    showHavePremiumPopUp()
-                } else {
-                    UserDefaults.patchType = .requests
-                    DispatchQueue.main.async {
-                        activatePremiumPatchingGroup()
+            do {
+                var bootstrapMessage = try BootstrapMessage(serializedBytes: buffer)
+                
+                if UserDefaults.patchType == .notSet {
+                    if bootstrapMessage.attributes["type"]?.stringValue == "premium" {
+                        UserDefaults.patchType = .disabled
+                        showHavePremiumPopUp()
                     }
+                    else {
+                        UserDefaults.patchType = .requests
+                        // Dispatch to main thread — calling activate() (method swizzling) from
+                        // a URLSession delegate background thread while inside the method being
+                        // swizzled is not thread-safe and causes a first-launch crash.
+                        DispatchQueue.main.async { activatePremiumPatchingGroup() }
+                    }
+                    
                 }
+                
+                if UserDefaults.patchType == .requests {
+                    modifyRemoteConfiguration(&bootstrapMessage.ucsResponse)
+                    
+                    orig.URLSession(
+                        session,
+                        dataTask: task,
+                        didReceiveData: try bootstrapMessage.serializedBytes()
+                    )
+                }
+                else {
+                    orig.URLSession(session, dataTask: task, didReceiveData: buffer)
+                }
+                
+                orig.URLSession(session, task: task, didCompleteWithError: nil)
+                return
             }
-            
-            if UserDefaults.patchType == .requests {
-                modifyRemoteConfiguration(&bootstrapMessage.ucsResponse)
-                let modifiedData = try bootstrapMessage.serializedData()   // ← corretto
-                orig.URLSession(session, dataTask: task, didReceiveData: modifiedData)
-            } else {
-                orig.URLSession(session, dataTask: task, didReceiveData: buffer)
+            catch {
             }
-            
-            orig.URLSession(session, task: task, didCompleteWithError: nil)
-        } catch {
-            // In caso di errore, passa l'errore originale a Spotify
-            orig.URLSession(session, task: task, didCompleteWithError: error)
         }
+        
+        orig.URLSession(session, task: task, didCompleteWithError: error)
     }
-}
-
-private func showHavePremiumPopUp() {
-    PopUpHelper.showPopUp(
-        delayed: true,
-        message: "have_premium_popup".localized,
-        buttonText: "OK".uiKitLocalized
-    )
 }
