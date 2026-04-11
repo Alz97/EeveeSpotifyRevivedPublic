@@ -82,7 +82,7 @@ func activatePremiumPatchingGroup() {
 }
 
 struct EeveeSpotify: Tweak {
-    static let version = "6.6.2"
+    static let version = "6.7.0"
     static let buildNumber = "1"
     
     static var hookTarget: VersionHookTarget {
