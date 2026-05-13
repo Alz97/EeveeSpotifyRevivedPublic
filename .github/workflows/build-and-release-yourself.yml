@@ -1,122 +1,146 @@
-name: Create IPA Packages
-
+name: Build IPA (PATCHED)
 on:
   workflow_dispatch:
     inputs:
-      ipa_url:
-        description: "URL to the decrypted IPA file"
-        default: ""
+      branch:
+        description: "Branch to build from"
+        default: "Master"
         required: true
         type: string
-      tweak_url:
-        description: "URL to the EeveeSpotify tweak file"
+      ipa_url:
+        description: "URL to a decrypted Spotify IPA (optional — IPA build is skipped if empty)"
         default: ""
-        required: true
+        required: false
         type: string
 
 env:
+  THEOS: ${{ github.workspace }}/theos
   SWIFTPROTOBUF_VERSION: "1.29.0"
 
 jobs:
   build:
     runs-on: macos-latest
-    permissions:
-      contents: write
-    env:
-      THEOS: ${{ github.workspace }}/theos
-
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.branch }}
+          fetch-depth: 0
+          submodules: recursive
 
       - uses: maxim-lobanov/setup-xcode@v1
         with:
           xcode-version: '16.2.0'
 
-      - name: Hide Sensitive Inputs
-        uses: levibostian/action-hide-sensitive-inputs@v1
+      - name: Setup Theos
+        uses: actions/checkout@v4
+        with:
+          repository: theos/theos
+          path: ${{ github.workspace }}/theos
+          submodules: recursive
 
-      - name: Download and Validate IPA
+      - name: Install build tools
+        run: |
+          brew install make dpkg ldid wget
+          echo "$(brew --prefix make)/libexec/gnubin" >> $GITHUB_PATH
+          python3 -m pip install --upgrade --break-system-packages \
+              git+https://github.com/asdfzxcvbn/pyzule-rw.git
+          # releases/latest/download redirect avoids api.github.com rate limit (anon 60/hr -> 403)
+          ARCH=$(uname -m); [ "$ARCH" = "x86_64" ] && SUFFIX=macos-amd64 || SUFFIX=macos-arm64
+          sudo curl -fsSL "https://github.com/asdfzxcvbn/ipapatch/releases/latest/download/ipapatch.${SUFFIX}" \
+              -o /usr/local/bin/ipapatch
+          sudo chmod +x /usr/local/bin/ipapatch
+          ipapatch --help >/dev/null
+
+      - name: Build EeveeSwiftProtobuf.framework from source
+        env:
+          SWIFTPROTOBUF_VERSION: ${{ env.SWIFTPROTOBUF_VERSION }}
+        run: |
+          chmod +x Tools/SwiftProtobufBuild/build-eeveeswiftprotobuf.sh
+          Tools/SwiftProtobufBuild/build-eeveeswiftprotobuf.sh
+
+      - name: Build .deb (rootless)
+        run: |
+          THEOS_PACKAGE_SCHEME=rootless make package FINALPACKAGE=1
+          DEB_PATH=$(find packages -name "com.eevee.spotify_*.deb" | head -1)
+          [ -n "$DEB_PATH" ] || { echo "deb not produced" >&2; exit 1; }
+          echo "DEB_PATH=$DEB_PATH"   >> $GITHUB_ENV
+          echo "DEB_NAME=$(basename "$DEB_PATH")" >> $GITHUB_ENV
+
+      - name: Upload .deb artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.DEB_NAME }}
+          path: ${{ env.DEB_PATH }}
+          if-no-files-found: error
+
+      # ─── IPA build (only when ipa_url is provided) ───────────────────
+
+      - name: Validate vanilla IPA
+        if: ${{ inputs.ipa_url != '' }}
         run: |
           wget "${{ inputs.ipa_url }}" --no-verbose -O ${{ github.workspace }}/spotify.ipa
           file_type=$(file --mime-type -b ${{ github.workspace }}/spotify.ipa)
           if [[ "$file_type" != "application/x-ios-app" && "$file_type" != "application/zip" ]]; then
-            echo "::error::Validation failed: The downloaded file is not a valid IPA. Detected type: $file_type."
+            echo "::error::Not a valid IPA: $file_type"
             exit 1
           fi
 
-      - name: Download and Validate Tweak
+      - name: Build zxPluginsInject.dylib
+        if: ${{ inputs.ipa_url != '' }}
         run: |
-          wget "${{ inputs.tweak_url }}" --no-verbose -O ${{ github.workspace }}/eeveespotify.deb
-          file_type=$(file --mime-type -b ${{ github.workspace }}/eeveespotify.deb)
-          if [[ "$file_type" != "application/vnd.debian.binary-package" ]]; then
-            echo "::error::Validation failed: The file is not a valid DEB file. Detected type: $file_type."
-            exit 1
+          chmod +x Tools/build-zxpi.sh
+          Tools/build-zxpi.sh
+
+      - name: Inject deb + framework into IPA (cyan)
+        if: ${{ inputs.ipa_url != '' }}
+        run: |
+          mkdir -p Outputs/IPAS
+          DEB_EXTRACT="$RUNNER_TEMP/deb-extract"
+          mkdir -p "$DEB_EXTRACT"
+          dpkg-deb -R "$DEB_PATH" "$DEB_EXTRACT"
+
+          DYLIB_SRC=$(find "$DEB_EXTRACT" -name 'EeveeSpotify.dylib' | head -1)
+          BUNDLE_SRC=$(find "$DEB_EXTRACT" -type d -name 'EeveeSpotify.bundle' | head -1)
+          FRAMEWORK_SRC=$(find "$DEB_EXTRACT" -type d -name 'EeveeSwiftProtobuf.framework' | head -1)
+
+          SPOT_VERSION=$(unzip -p ${{ github.workspace }}/spotify.ipa 'Payload/Spotify.app/Info.plist' \
+              | plutil -extract CFBundleShortVersionString raw - 2>/dev/null || echo "unknown")
+          EEVEE_VERSION=$(grep -E '^Version:' control | awk '{print $2}')
+          OUT="Outputs/IPAS/EeveeSpotify-${EEVEE_VERSION}-${SPOT_VERSION}.ipa"
+
+          INJECT=("$DYLIB_SRC")
+          [ -n "$FRAMEWORK_SRC" ] && INJECT+=("$FRAMEWORK_SRC")
+          [ -n "$BUNDLE_SRC" ]    && INJECT+=("$BUNDLE_SRC")
+
+          # cyan: -du strips appex/Watch (we don't have a wildcard profile),
+          # -m 15.0 sets MinimumOSVersion floor, -c 9 max compression.
+          cyan -i ${{ github.workspace }}/spotify.ipa -o "$OUT" \
+               -f "${INJECT[@]}" -c 9 -m 15.0 -du
+          echo "OUT_IPA=$OUT" >> $GITHUB_ENV
+
+      - name: LC-inject zxPluginsInject (ipapatch)
+        if: ${{ inputs.ipa_url != '' }}
+        run: |
+          ipapatch --input "$OUT_IPA" --inplace --noconfirm \
+                   --dylib packages/zxPluginsInject.dylib
+
+      - name: Strip Watch app (if any survived)
+        if: ${{ inputs.ipa_url != '' }}
+        run: |
+          cd "$(dirname "$OUT_IPA")"
+          rm -rf Payload
+          unzip -q "$(basename "$OUT_IPA")"
+          if [ -d "Payload/Spotify.app/Watch" ]; then
+            rm -rf Payload/Spotify.app/Watch
+            zip -qry "$(basename "$OUT_IPA")" Payload
           fi
+          rm -rf Payload
 
-      - name: Download SwiftProtobuf
-        run: |
-          wget https://github.com/whoeevee/swift-protobuf/releases/download/${{ env.SWIFTPROTOBUF_VERSION }}/org.swift.protobuf.swiftprotobuf_${{ env.SWIFTPROTOBUF_VERSION }}_iphoneos-arm.deb
-          wget https://github.com/whoeevee/swift-protobuf/releases/download/${{ env.SWIFTPROTOBUF_VERSION }}/org.swift.protobuf.swiftprotobuf_${{ env.SWIFTPROTOBUF_VERSION }}_iphoneos-arm64.deb
-
-          echo "SWIFTPROTOBUF_ROOTFUL=org.swift.protobuf.swiftprotobuf_${{ env.SWIFTPROTOBUF_VERSION }}_iphoneos-arm.deb" >> $GITHUB_ENV
-          echo "SWIFTPROTOBUF_ROOTLESS=org.swift.protobuf.swiftprotobuf_${{ env.SWIFTPROTOBUF_VERSION }}_iphoneos-arm64.deb" >> $GITHUB_ENV
-
-      - name: Download OpenSpotifySafariExtension
-        run: |
-          git clone https://github.com/BillyCurtis/OpenSpotifySafariExtension
-          echo "OPENSPOTIFYSAFARIEXTENSION=OpenSpotifySafariExtension/OpenSpotifySafariExtension.appex" >> $GITHUB_ENV
-
-      - name: Setup insert-dylib
-        run: |
-          git clone https://github.com/Tyilo/insert_dylib.git
-          xcrun clang -x c -arch arm64 ./insert_dylib/insert_dylib/main.c -I/usr/include/ -o insert-dylib
-          sudo mv insert-dylib /usr/local/bin/
-          sudo chmod +x /usr/local/bin/insert-dylib
-
-      - name: Setup ivinject
-        run: |
-          git clone https://github.com/whoeevee/ivinject.git
-          cp -r ./ivinject/KnownFrameworks ~/.ivinject
-          wget https://github.com/whoeevee/ivinject/releases/download/first/ivinject-arm64
-          sudo mv ivinject-arm64 /usr/local/bin/
-          sudo chmod +x /usr/local/bin/ivinject-arm64
-
-      - name: Setup ipapatch
-        run: |
-          wget https://github.com/asdfzxcvbn/ipapatch/releases/download/v2.1.0/ipapatch.macos-arm64
-          sudo mv ipapatch.macos-arm64 /usr/local/bin/ipapatch
-          sudo chmod +x /usr/local/bin/ipapatch
-
-      - name: Remove Watch App from IPA
-        run: |
-          unzip -q spotify.ipa -d spotify_temp
-          rm -rf spotify_temp/Payload/Spotify.app/Watch
-          rm -rf spotify_temp/Payload/Spotify.app/PlugIns/*.appex
-          cd spotify_temp
-          zip -qr ../spotify_clean.ipa Payload
-          cd ..
-          rm -rf spotify_temp
-          mv spotify_clean.ipa spotify.ipa
-          
-      - name: Create EeveeSpotify Package
-        run: |
-          ivinject-arm64 spotify.ipa EeveeSpotify.ipa \
-            -i eeveespotify.deb "$OPENSPOTIFYSAFARIEXTENSION" \
-            -s - -d --level Optimal
-
-      - name: Create Patched Package
-        run: ipapatch -input EeveeSpotify.ipa -output EeveeSpotify-patched.ipa
-   
-      - name: Upload to GitHub Releases
-        uses: softprops/action-gh-release@v2.0.1
+      - name: Upload IPA artifact
+        if: ${{ inputs.ipa_url != '' }}
+        uses: actions/upload-artifact@v4
         with:
-          tag_name: eevee-${{ github.run_number }}
-          name: EeveeSpotify (${{ github.run_number }})
-          files: |
-            EeveeSpotify.ipa 
-            EeveeSpotify-patched.ipa
-          draft: true
-
-      - name: Output Release URL
-        run: |
-          echo "::notice::Release available at: https://github.com/${{ github.repository }}/releases"
+          name: EeveeSpotify-IPA
+          path: ${{ env.OUT_IPA }}
+          if-no-files-found: error
