@@ -8,21 +8,24 @@ TWEAK_NAME = EeveeSpotify
 
 EeveeSpotify_FILES = $(shell find Sources/EeveeSpotify -name '*.swift') $(shell find Sources/EeveeSpotifyC -name '*.m' -o -name '*.c' -o -name '*.mm' -o -name '*.cpp')
 EeveeSpotify_SWIFTFLAGS = -ISources/EeveeSpotifyC/include -Osize
-EeveeSpotify_EXTRA_FRAMEWORKS = SwiftProtobuf
+EeveeSpotify_EXTRA_FRAMEWORKS = EeveeSwiftProtobuf
 EeveeSpotify_CFLAGS = -fobjc-arc -ISources/EeveeSpotifyC/include -Os
+
+# Sideload compatibility (keychain redirect, group containers, CloudKit) is
+# handled out-of-process by modules/zxPluginsInject — LC-injected via ipapatch
+# in build-ipa-local.sh and the GitHub workflow. No flags needed here.
 
 include $(THEOS_MAKE_PATH)/tweak.mk
 
 internal-stage::
-	# Bundle SwiftProtobuf.framework directly into the package
-	# This allows the DEB to work without external SwiftProtobuf installation
+	# Bundle EeveeSwiftProtobuf.framework into the package. Renamed from
+	# SwiftProtobuf so the @objc class names don't collide with the
+	# SwiftProtobuf statically embedded in SpotifyShared.framework.
 	mkdir -p $(THEOS_STAGING_DIR)/Library/Frameworks
-	cp -r $(THEOS)/lib/iphone/rootless/SwiftProtobuf.framework $(THEOS_STAGING_DIR)/Library/Frameworks/
+	cp -r $(THEOS)/lib/iphone/rootless/EeveeSwiftProtobuf.framework $(THEOS_STAGING_DIR)/Library/Frameworks/
 
-# Legacy build step (no longer needed, kept for reference)
-copy-swiftprotobuf:
-	mkdir -p swiftprotobuf && cd swiftprotobuf ;\
-	curl -OL https://github.com/whoeevee/EeveeSpotify/releases/download/swift2.0/org.swift.protobuf.swiftprotobuf_1.26.0_iphoneos-arm.deb ;\
-	ar -x org.swift.protobuf.swiftprotobuf_1.26.0_iphoneos-arm.deb ;\
-	tar -xvf data.tar.lzma ;\
-	cp -r Library/Frameworks/SwiftProtobuf.framework "${THEOS}/lib" ;\
+# Build EeveeSwiftProtobuf.framework from apple/swift-protobuf source. Run
+# this once before `make package`. Re-run if SWIFTPROTOBUF_VERSION changes
+# or `swift --version` jumps a major.
+build-eeveeswiftprotobuf:
+	Tools/SwiftProtobufBuild/build-eeveeswiftprotobuf.sh
