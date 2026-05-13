@@ -131,7 +131,7 @@ func activateSessionLogoutProtection(minimal: Bool) {
 }
 
 struct EeveeSpotify: Tweak {
-    static let version = "6.6.2"
+    static let version = "6.7.1"
     static let buildNumber = "1"
     
     static var hookTarget: VersionHookTarget {
