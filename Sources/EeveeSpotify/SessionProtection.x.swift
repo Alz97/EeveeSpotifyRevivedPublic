@@ -1,13 +1,9 @@
 import Orion
 import Foundation
 import os
+import ObjectiveC.runtime
 
 // MARK: - Session Logout Protection
-// Hooks all logout-related methods to prevent Spotify from logging out
-// when it detects the account isn't actually premium.
-// Also intercepts Ably WebSocket messages to block server-side revocation events.
-// Additionally blocks network endpoints that trigger session invalidation.
-// Extends OAuth token expiry to prevent internal reauth triggers.
 
 struct SessionLogoutHookGroup: HookGroup { }
 
@@ -84,7 +80,6 @@ class SessionServiceImplHook: ClassHook<NSObject> {
     }
 
     func userInitiatedLogout() {
-        // Permette il logout solo se chiamato esplicitamente dall'utente sul main thread
         if Thread.isMainThread {
             SPTAuthSessionHook.allowLogout = true
             orig.userInitiatedLogout()
@@ -92,7 +87,6 @@ class SessionServiceImplHook: ClassHook<NSObject> {
                 SPTAuthSessionHook.allowLogout = false
             }
         }
-        // else: blocca logout automatici da background thread
     }
 
     func sessionDidLogout(_ session: AnyObject, withReason reason: AnyObject) {
@@ -179,7 +173,6 @@ class OauthAccessTokenBridgeHook: ClassHook<NSObject> {
 
 // MARK: - Ably WebSocket Transport Hooks
 
-// Blocca azioni Ably sospette e messaggi product-state-update
 private let blockedAblyActions: Set<Int> = [5, 6, 7, 8, 9, 12, 13, 17]
 
 private func extractAblyAction(_ text: String) -> Int? {
@@ -190,12 +183,10 @@ private func extractAblyAction(_ text: String) -> Int? {
 }
 
 private func shouldBlockAblyMessage(_ text: String) -> Bool {
-    // 1. Controlla azione numerica bloccata
     if let action = extractAblyAction(text), blockedAblyActions.contains(action) {
         return true
     }
     
-    // 2. Blocca specifici messaggi product-state-update (action 15)
     if let action = extractAblyAction(text), action == 15 {
         if text.contains("product-state-update") ||
            text.contains("product_state_update") ||
@@ -204,7 +195,6 @@ private func shouldBlockAblyMessage(_ text: String) -> Bool {
         }
     }
     
-    // 3. Controlla parole chiave generiche di logout/revoca
     let lowercased = text.lowercased()
     return lowercased.contains("logout") || lowercased.contains("revoke") || lowercased.contains("disconnect")
 }
@@ -221,11 +211,9 @@ class ARTWebSocketTransportHook: ClassHook<NSObject> {
     }
 
     func webSocket(_ ws: AnyObject, didFailWithError error: AnyObject) {
-        // Silently ignore errors
+        // Ignore
     }
 }
-
-// MARK: - Ably SRWebSocket Frame Hook
 
 class ARTSRWebSocketHook: ClassHook<NSObject> {
     typealias Group = SessionLogoutHookGroup
@@ -259,7 +247,6 @@ class URLSessionTaskResumeHook: ClassHook<NSObject> {
         let path = url.path
         let absolute = url.absoluteString
 
-        // Blocca richieste con parole chiave di logout (solo dopo 30s)
         if elapsed > 30 {
             let logoutKeywords = ["logout", "revoke", "delete", "signout", "terminate", "invalidate", "destroy"]
             for keyword in logoutKeywords {
@@ -270,13 +257,12 @@ class URLSessionTaskResumeHook: ClassHook<NSObject> {
             }
         }
 
-        // Blocca endpoint critici noti (solo dopo 30s)
         if elapsed > 30 {
             if host.contains("spotify") || host.contains("spclient") || host.contains("ably") {
+                // Nota: bootstrap/v1/bootstrap NON viene bloccato per permettere il login iniziale
                 if path.contains("DeleteToken") ||
                    path.contains("signup/public") ||
                    path.contains("pses/screenconfig") ||
-                   path.contains("bootstrap/v1/bootstrap") ||
                    path.contains("/signup/public/v1/account") ||
                    path.contains("account?") ||
                    path.contains("sdk-exp") ||
