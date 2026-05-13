@@ -4,7 +4,7 @@ on:
     inputs:
       branch:
         description: "Branch to build from"
-        default: "Master"
+        default: "main"
         required: true
         type: string
       ipa_url:
