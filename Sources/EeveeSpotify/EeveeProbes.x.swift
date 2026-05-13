@@ -1,0 +1,170 @@
+import Foundation
+import Orion
+
+private func probeEnabled(_ name: String) -> Bool {
+    guard let v = getenv(name) else { return false }
+    let s = String(cString: v)
+    return s == "1" || s.lowercased() == "true" || s.lowercased() == "yes"
+}
+
+private let traceNet:   Bool = false
+private let traceNotif: Bool = false
+
+private let importantNotifSubstrings: [String] = [
+    "premium", "product", "account", "session", "login", "logout",
+    "authState", "authSession", "subscription"
+]
+
+class TaskResumeProbeHook: ClassHook<NSObject> {
+    typealias Group = ProbeNetGroup
+    static let targetName = "NSURLSessionTask"
+
+    func resume() {
+        if traceNet, let task = target as? URLSessionTask,
+           let url = task.currentRequest?.url ?? task.originalRequest?.url {
+            let host = url.host ?? "?"
+            if host.contains("spotify") || host.contains("scdn") || host.contains("spclient")
+                || host.contains("googleapis") || host.contains("apresolve") {
+                let method = task.currentRequest?.httpMethod ?? "?"
+                NSLog("[PROBE][NET] >> %@ %@%@", method, host, url.path)
+            }
+        }
+        orig.resume()
+    }
+}
+
+class NotifPostHook: ClassHook<NSObject> {
+    typealias Group = ProbeNotifGroup
+    static let targetName = "NSNotificationCenter"
+
+    // Don't touch notification.object — can be a zombie ref. type(of:) on a
+    // dealloc'd NSObject dispatches to __NSGenericDeallocHandler and aborts.
+    func postNotification(_ notification: Notification) {
+        let name = notification.name.rawValue
+        let lower = name.lowercased()
+        let important = importantNotifSubstrings.contains { lower.contains($0) }
+        if traceNotif || important {
+            NSLog("[PROBE][NOTIF] %@", name)
+        }
+        orig.postNotification(notification)
+    }
+
+    func postNotificationName(_ aName: NSNotification.Name, object anObject: Any?) {
+        let name = aName.rawValue
+        let lower = name.lowercased()
+        let important = importantNotifSubstrings.contains { lower.contains($0) }
+        if traceNotif || important {
+            NSLog("[PROBE][NOTIF] %@", name)
+        }
+        orig.postNotificationName(aName, object: anObject)
+    }
+
+    func postNotificationName(_ aName: NSNotification.Name, object anObject: Any?, userInfo aUserInfo: [AnyHashable : Any]?) {
+        let name = aName.rawValue
+        let lower = name.lowercased()
+        let important = importantNotifSubstrings.contains { lower.contains($0) }
+        if traceNotif || important {
+            let uiKeys = aUserInfo?.keys.map { "\($0)" }.joined(separator: ",") ?? ""
+            NSLog("[PROBE][NOTIF] %@ userInfo=[%@]", name, uiKeys)
+        }
+        orig.postNotificationName(aName, object: anObject, userInfo: aUserInfo)
+    }
+}
+
+struct ProbeNetGroup: HookGroup {}
+struct ProbeNotifGroup: HookGroup {}
+
+private let classesToDump: [String] = [
+    "Authentication_ForcedLogoutImpl.ForcedLogoutDaemon",
+    "Authentication_AuthImpl.AccessTokenRevokerDaemon",
+    "Authentication_AuthImpl.AccessTokenUpdateTask",
+    "Authentication_AuthImpl.AuthTaskV",
+    "Authentication_AuthImpl.Login",
+    "Authentication_LogoutAPI.LogoutService",
+    "Authentication_ReloginAPI.ReloginService",
+    "Authentication_AuthAPI.LogoutNotifierService",
+    "Authentication_AuthAPI.AuthLoginNotifierService",
+    "Connectivity_SessionImpl.SessionServiceImpl",
+    "Connectivity_SessionImpl.SessionFactoryImpl",
+]
+
+private let runClassDump = false
+private var classDumpDone = false
+
+private func dumpClass(_ name: String) {
+    guard let cls = NSClassFromString(name) else {
+        NSLog("[PROBE][CLASS] %@: <not found>", name)
+        return
+    }
+    NSLog("[PROBE][CLASS] %@", name)
+    var count: UInt32 = 0
+    if let methods = class_copyMethodList(cls, &count) {
+        for i in 0..<Int(count) {
+            let m = methods[i]
+            let sel = method_getName(m)
+            let enc = method_getTypeEncoding(m).map { String(cString: $0) } ?? "?"
+            NSLog("[PROBE][CLASS]   - %@  (enc=%@)", NSStringFromSelector(sel), enc)
+        }
+        free(methods)
+    }
+    if let metaCls = object_getClass(cls) {
+        var ccount: UInt32 = 0
+        if let cmethods = class_copyMethodList(metaCls, &ccount) {
+            for i in 0..<Int(ccount) {
+                let m = cmethods[i]
+                let sel = method_getName(m)
+                let enc = method_getTypeEncoding(m).map { String(cString: $0) } ?? "?"
+                NSLog("[PROBE][CLASS]   + %@  (enc=%@)", NSStringFromSelector(sel), enc)
+            }
+            free(cmethods)
+        }
+    }
+    var ivCount: UInt32 = 0
+    if let ivars = class_copyIvarList(cls, &ivCount) {
+        for i in 0..<Int(ivCount) {
+            let iv = ivars[i]
+            let nm = ivar_getName(iv).map { String(cString: $0) } ?? "?"
+            let tp = ivar_getTypeEncoding(iv).map { String(cString: $0) } ?? "?"
+            NSLog("[PROBE][CLASS]   * %@ :: %@", nm, tp)
+        }
+        free(ivars)
+    }
+}
+
+private func dumpClassesOnce() {
+    guard runClassDump, !classDumpDone else { return }
+    classDumpDone = true
+    for n in classesToDump { dumpClass(n) }
+
+    // objc_copyClassList returns AutoreleasingUnsafeMutablePointer; subscripting
+    // triggers retain/autorelease msgSend which aborts on iOS 26's baked-in
+    // __NSGenericDeallocHandler entries. objc_getClassList with a raw buffer
+    // sidesteps it.
+    let total = objc_getClassList(nil, 0)
+    NSLog("[PROBE][CLASSLIST] scanning %d classes…", Int(total))
+    let buf = UnsafeMutablePointer<AnyClass>.allocate(capacity: Int(total))
+    defer { buf.deallocate() }
+    let n = objc_getClassList(AutoreleasingUnsafeMutablePointer<AnyClass>(buf), total)
+    for i in 0..<Int(n) {
+        let raw = UnsafeRawPointer(buf).load(fromByteOffset: i * MemoryLayout<UnsafeRawPointer>.size,
+                                              as: UnsafeRawPointer.self)
+        let cstr = class_getName(unsafeBitCast(raw, to: AnyClass.self))
+        let nm = String(cString: cstr)
+        if nm.contains("ProductState") || nm.contains("AccountAttribute")
+            || nm.contains("PremiumOnly") || nm.contains("Subscription")
+            || (nm.contains("SPT") && (nm.contains("Account") || nm.contains("User")))
+            || nm.contains("Esperanto") || nm.contains("ProductType") {
+            NSLog("[PROBE][CLASSLIST] %s", cstr)
+        }
+    }
+    NSLog("[PROBE][CLASSLIST] done")
+}
+
+func activateEeveeProbes() {
+    let netOn = traceNet
+    let notifOn = true
+    NSLog("[PROBE] activating: net=%@ notif=%@", netOn ? "on" : "off", notifOn ? "on" : "off")
+    if netOn { ProbeNetGroup().activate() }
+    if notifOn { ProbeNotifGroup().activate() }
+    dumpClassesOnce()
+}
