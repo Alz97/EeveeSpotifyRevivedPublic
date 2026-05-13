@@ -26,7 +26,7 @@ jobs:
         with:
           ref: ${{ inputs.branch }}
           fetch-depth: 0
-          submodules: recursive
+          submodules: false
 
       - uses: maxim-lobanov/setup-xcode@v1
         with:
